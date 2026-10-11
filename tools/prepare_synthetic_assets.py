@@ -1,5 +1,6 @@
 """Add head-skin weights as vertex colors without changing source assets."""
 import json
+import argparse
 import struct
 from pathlib import Path
 import numpy as np
@@ -10,7 +11,7 @@ OUTPUT = ROOT / 'assets/generated/head_weighted'
 DTYPES = {5120:'i1',5121:'u1',5122:'<i2',5123:'<u2',5125:'<u4',5126:'<f4'}
 WIDTH = {'SCALAR':1,'VEC2':2,'VEC3':3,'VEC4':4,'MAT4':16}
 
-def convert(slug):
+def convert(slug, anatomy=False):
     config = json.loads((SOURCE/slug/'viewer_config.json').read_text())
     data = (SOURCE/slug/config['Model']['Name']).read_bytes()
     size, kind = struct.unpack_from('<II', data, 12)
@@ -33,6 +34,15 @@ def convert(slug):
         descendants.add(i)
         for child in doc['nodes'][i].get('children',[]): visit(child)
     for head in heads: visit(head)
+    excluded=set()
+    def exclude(i):
+        excluded.add(i)
+        for child in doc['nodes'][i].get('children',[]): exclude(child)
+    if anatomy:
+        for i,node in enumerate(doc['nodes']):
+            if any(word in node.get('name','').lower() for word in ('hair','ponytail','braid','hat','earring','maskwrap','masktube')):
+                exclude(i)
+        descendants-=excluded
     totals = [0,0]
     seen = set()
     for node in doc['nodes']:
@@ -49,10 +59,14 @@ def convert(slug):
             attrs = prim['attributes']
             if 'JOINTS_0' not in attrs: continue
             weights = np.zeros(len(accessor(attrs['POSITION'])), dtype=np.float32)
+            torso = np.zeros_like(weights)
+            torso_joints=[i for i,j in enumerate(joints) if doc['nodes'][j].get('name','').lower() in
+                          ('pelvis','spine1','spine2','spine3','spine4','spine1_offset','spine2_offset','spine3_offset','spine4_offset')]
             for k in (0,1):
                 if f'JOINTS_{k}' in attrs:
                     js = accessor(attrs[f'JOINTS_{k}']); ws = accessor(attrs[f'WEIGHTS_{k}'])
                     weights += (ws*np.isin(js,head_joint_indices)).sum(axis=1)
+                    torso += (ws*np.isin(js,torso_joints)).sum(axis=1)
             positions = accessor(attrs['POSITION'])
             local = np.column_stack([positions,np.ones(len(positions))]) @ head_inverse.T
             # Crop long ponytails/scarves below the skull. This is a visual head
@@ -60,8 +74,22 @@ def convert(slug):
             envelope = ((local[:,1]>=-.115) & (local[:,1]<=.30)
                         & (np.abs(local[:,0])<=.25) & (np.abs(local[:,2])<=.28))
             weights *= envelope
+            if anatomy:
+                material=doc.get('materials',[])[prim['material']].get('name','').lower() if 'material' in prim else ''
+                if any(word in material for word in ('hair','bow','grenade','props','acc_','drone','rocket','orb_','floaters')):
+                    weights[:]=0;torso[:]=0
+                # Torso influence alone is insufficient for rigid backpacks/coattails.
+                # Restrict it to the central trunk in bind space, between pelvis and neck.
+                anchors={doc['nodes'][j].get('name','').lower():np.linalg.inv(inverse_binds[i])[:3,3]
+                         for i,j in enumerate(joints)}
+                pelvis=anchors['pelvis'];neck=anchors['neck']
+                axis=neck-pelvis; length=np.linalg.norm(axis); axis/=length
+                delta=positions-pelvis;along=delta@axis
+                radial=np.linalg.norm(delta-along[:,None]*axis,axis=1)
+                torso*=((along>=-.10)&(along<=length)&(radial<=.27))
             colors = np.zeros((len(weights),4), dtype=np.uint8)
             colors[:,0] = np.rint(np.clip(weights,0,1)*255).astype(np.uint8)
+            if anatomy: colors[:,1]=np.rint(np.clip(torso,0,1)*255).astype(np.uint8)
             colors[:,3] = 255
             while len(binary)%4: binary.append(0)
             view = len(doc['bufferViews'])
@@ -78,12 +106,16 @@ def convert(slug):
     output = struct.pack('<III',0x46546C67,2,28+len(encoded)+len(binary))
     output += struct.pack('<II',len(encoded),0x4E4F534A)+encoded
     output += struct.pack('<II',len(binary),0x004E4942)+binary
-    (OUTPUT/f'{slug}.glb').write_bytes(output)
+    destination=ROOT/'assets/generated/anatomy_weighted' if anatomy else OUTPUT
+    destination.mkdir(parents=True,exist_ok=True)
+    (destination/f'{slug}.glb').write_bytes(output)
     return {'character':slug,'vertices':totals[0],'head_vertices':totals[1], 'head_bone':doc['nodes'][heads[0]]['name']}
 
 if __name__ == '__main__':
+    parser=argparse.ArgumentParser();parser.add_argument('--anatomy',action='store_true');args=parser.parse_args()
     OUTPUT.mkdir(parents=True,exist_ok=True)
     catalog=json.loads((SOURCE/'catalog.json').read_text())
-    records=[convert(c['slug']) for c in catalog['characters']]
-    (OUTPUT/'report.json').write_text(json.dumps(records,indent=2))
+    records=[convert(c['slug'],args.anatomy) for c in catalog['characters']]
+    destination=ROOT/'assets/generated/anatomy_weighted' if args.anatomy else OUTPUT
+    (destination/'report.json').write_text(json.dumps(records,indent=2))
     print(json.dumps(records,indent=2))

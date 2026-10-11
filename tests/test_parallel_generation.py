@@ -8,7 +8,8 @@ from tools import generate_real_maps as generator
 
 
 @pytest.mark.parametrize('workers',[2,3])
-def test_workers_overlap_without_sharing_frame_ids(tmp_path, monkeypatch, workers):
+@pytest.mark.parametrize('start,split',[(0,'train'),(5000,'test')])
+def test_workers_overlap_without_sharing_frame_ids(tmp_path, monkeypatch, workers, start, split):
     (tmp_path/'tools').mkdir()
     (tmp_path/'tools/convert_blender_map.py').write_text('converter')
     (tmp_path/'environment').mkdir()
@@ -29,14 +30,14 @@ def test_workers_overlap_without_sharing_frame_ids(tmp_path, monkeypatch, worker
         for i in range(start,start+int(args['--count'])):
             stem=str(1000000+number*10000+i)
             for folder,suffix in [('images','.jpg'),('masks','.png'),('metadata','.json')]:
-                dest=output/folder/'train';dest.mkdir(parents=True,exist_ok=True)
+                dest=output/folder/args['--split'];dest.mkdir(parents=True,exist_ok=True)
                 data={'scene_family':args['--map'],'spatial_region':str(i),'map_viewpoint':i,'crosshair':{'style':'none'}}
                 (dest/(stem+suffix)).write_text(json.dumps(data) if folder=='metadata' else 'fixture')
     monkeypatch.setattr(generator,'ROOT',tmp_path)
     monkeypatch.setattr(generator,'run',fake_run)
-    monkeypatch.setattr(sys,'argv',['generate','--output',str(output),'--workers',str(workers)])
+    monkeypatch.setattr(sys,'argv',['generate','--output',str(output),'--workers',str(workers),'--start',str(start),'--split',split])
     generator.main()
     state=json.loads((output/'generation_status.json').read_text())
     assert state['phase']=='complete' and state['images']==2*workers
     assert set(state['completed_maps'])=={r['name'].lower() for r in records} and not state['active_workers']
-    assert {p.stem for p in (output/'metadata/train').iterdir()}=={str(1000000+n*10000+i) for n in range(workers) for i in range(2)}
+    assert {p.stem for p in (output/'metadata'/split).iterdir()}=={str(1000000+n*10000+i) for n in range(workers) for i in range(start,start+2)}

@@ -61,7 +61,8 @@ def main():
         assert len(list((DEST/'images'/split).glob('*.png')))==audit['splits'][split]['images']
         assert len(list((DEST/'labels'/split).glob('*.txt')))==audit['splits'][split]['images']
     (DEST/'audit.json').write_text(json.dumps(audit,indent=2))
-    (DEST/'data.yaml').write_text(f'path: {DEST.as_posix()}\ntrain: images/train\nval: images/val\ntest: images/test\nnames:\n  0: enemy\n  1: teammate\n  2: head\n')
+    names=''.join(f'  {i}: {name}\n' for i,name in enumerate(audit['class_names']))
+    (DEST/'data.yaml').write_text(f'path: {DEST.as_posix()}\ntrain: images/train\nval: images/val\ntest: images/test\nnames:\n'+names)
     print('PADDING_COMPLETE',flush=True)
 
 

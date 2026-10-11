@@ -21,6 +21,7 @@ var sky_color := Color("839bb0")
 var start_time: int
 var base_seed := 20261011
 var overwrite := false
+var anatomy_labels := false
 const MIN_PLAYER_DISTANCE := 2.8
 const SCREEN_GAP_PIXELS := 16.0
 
@@ -45,6 +46,7 @@ func _ready() -> void:
 	catalog = JSON.parse_string(FileAccess.get_file_as_string(source_root.path_join("catalog.json")))["characters"]
 	output_dir = ProjectSettings.globalize_path("res://../datasets/valorant_synthetic_10k")
 	for arg in OS.get_cmdline_user_args():
+		if arg == "--anatomy": anatomy_labels = true
 		if arg == "--overwrite": overwrite = true
 		if arg.begins_with("--count="): total = int(arg.get_slice("=",1))
 		if arg.begins_with("--start="): first = int(arg.get_slice("=",1))
@@ -232,7 +234,8 @@ func load_pack(group: int) -> void:
 		var config: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(directory.path_join("viewer_config.json")))
 		var document := GLTFDocument.new()
 		var state := GLTFState.new()
-		var err := document.append_from_file(ProjectSettings.globalize_path("res://../assets/generated/head_weighted/"+slug+".glb"),state)
+		var asset_folder := "anatomy_weighted" if anatomy_labels else "head_weighted"
+		var err := document.append_from_file(ProjectSettings.globalize_path("res://../assets/generated/"+asset_folder+"/"+slug+".glb"),state)
 		assert(err == OK)
 		var actor: Node3D = document.generate_scene(state)
 		stage.add_child(actor)
@@ -256,6 +259,7 @@ func load_pack(group: int) -> void:
 				mesh.set_surface_override_material(surface,beauty)
 				var mask := ShaderMaterial.new()
 				mask.shader = mask_shader
+				mask.set_shader_parameter("anatomy_labels",anatomy_labels)
 				mask.set_shader_parameter("instance_value",float((index+1)*32)/255.0)
 				mask.set_shader_parameter("cutout",info.get("Type","")=="Decals")
 				mask.set_shader_parameter("base_uv2",info.get("BaseUV2",false))

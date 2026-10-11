@@ -1,11 +1,33 @@
 # Valorant detection experiments
 
-Synthetic native 400x400 crops with enemy, teammate and head labels. Code only:
+Synthetic native 400x400 crops. Version 6 uses enemy torso and enemy head labels;
+older versions use enemy, teammate and head labels. Code only:
 images, character assets, masks, checkpoints and generated results are excluded
 from Git. The private dataset is
 [edgeai-lab/valorant-detection-400](https://huggingface.co/datasets/edgeai-lab/valorant-detection-400).
 
-## Real-map regeneration (version 5)
+## Enemy anatomy regeneration (version 6)
+
+The v6 pipeline regenerates 30,000 train, 1,000 validation and 1,000 test images.
+Classes are `0: enemy_body` (chest, abdomen and pelvis) and `1: enemy_head`.
+No teammates are rendered. Hair, arms and legs remain visible occluders but are
+excluded from target masks. Labels use visible anatomy estimated from skin
+weights, material names and envelopes, not official game collision hitboxes.
+Camera regions are partitioned by split; map assets and target regions can be shared.
+Bounding boxes can enclose excluded pixels; inspect masks for the exact surfaces.
+
+```powershell
+python tools/prepare_synthetic_assets.py --anatomy
+python tools/rebuild_anatomy_dataset.py --publish
+```
+
+The character review is rendered with `environment/anatomy_review.tscn -- --anatomy`
+and assembled by `tools/build_anatomy_review.py`. It shows all 29 characters from
+three angles, with boxes and exact visible masks. On H100, use the two-class
+handoff: `python tools/train_enemy_anatomy.py --revision <dataset-commit>`.
+Old three-class metrics and class IDs are incompatible with v6.
+
+## Real-map regeneration (version 5, historical)
 
 The version-5 pipeline replaces all 30,000 training images with native 400x400
 renders from 11 user-supplied Blender maps: Abyss, Ascent, Bind, Breeze,

@@ -26,15 +26,19 @@ def run(command, log, marker):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--anatomy',action='store_true')
+    parser.add_argument('--total-images',type=int,help='Distribute exactly this many images across selected maps.')
     parser.add_argument('--blender', type=Path, default=Path('C:/Program Files/Blender Foundation/Blender 5.2/blender.exe'))
     parser.add_argument('--output', type=Path, default=ROOT/'datasets/valorant_real_maps_30000')
+    parser.add_argument('--start', type=int, default=0, help='First local sample index; use a new range for evaluation renders')
+    parser.add_argument('--split', choices=['train','val','test'], default='train')
     parser.add_argument('--pilot', type=int, default=0, help='Render this many per map instead of the full quotas')
     parser.add_argument('--maps', nargs='*')
     parser.add_argument('--batch-size', type=int, default=500)
     parser.add_argument('--workers', type=int, choices=[1,2,3], default=2)
     parser.add_argument('--rerender-map', nargs='*', default=[])
     args = parser.parse_args()
-    assert args.batch_size > 0
+    assert args.batch_size > 0 and args.start >= 0
     output = args.output.resolve(); output.mkdir(parents=True, exist_ok=True)
     logs = output/'logs'; logs.mkdir(exist_ok=True)
     manifest = json.loads((ROOT/'assets/source/valorant_maps/manifest.json').read_text())
@@ -42,13 +46,15 @@ def main():
     renderer = ROOT/'environment/real_maps_dataset.gd'
     version = digest(converter)
     records = [(i, r) for i, r in enumerate(manifest['maps']) if not args.maps or r['name'].lower() in args.maps]
+    if args.total_images:
+        records=[(i,dict(r,planned_training_images=args.total_images//len(records)+int(j<args.total_images%len(records)))) for j,(i,r) in enumerate(records)]
     total = sum(args.pilot or r['planned_training_images'] for _, r in records)
     old_state=json.loads((output/'generation_status.json').read_text()) if (output/'generation_status.json').exists() else {}
     renderer_history=old_state.get('renderer_history',[])
     if old_state.get('renderer_sha256') and old_state['renderer_sha256'] not in renderer_history:
         renderer_history.append(old_state['renderer_sha256'])
     state = {'phase': 'converting', 'target': total, 'completed_maps': [], 'started_at': time.time(),
-             'renderer_history':renderer_history, 'worker_limit':args.workers, 'active_workers':{},
+             'sample_start':args.start, 'split':args.split, 'renderer_history':renderer_history, 'worker_limit':args.workers, 'active_workers':{},
              'converter_sha256': version, 'renderer_sha256': digest(renderer)}
     state_lock=threading.RLock()
     def save():
@@ -84,16 +90,17 @@ def main():
             command = [str(ROOT/'tools/godot/Godot_v4.7.2-stable_win64_console.exe'), '--path', str(ROOT/'environment'),
                        '--rendering-method', 'gl_compatibility', '--disable-vsync', '--position', '-10000,-10000',
                        'real_maps_dataset.tscn', '--', f'--map={name}', f'--map-number={number}',
-                       f'--output={output.as_posix()}']
-            for start in range(0, count, args.batch_size):
-                size = min(args.batch_size, count-start)
+                       f'--output={output.as_posix()}',f'--split={args.split}']
+            if args.anatomy:command.append('--anatomy')
+            for start in range(args.start, args.start+count, args.batch_size):
+                size = min(args.batch_size, args.start+count-start)
                 stems = [str(1000000+number*10000+i) for i in range(start,start+size)]
                 if name not in args.rerender_map and all(
-                    (output/folder/'train'/(stem+suffix)).exists()
+                    (output/folder/args.split/(stem+suffix)).exists()
                     for stem in stems for folder,suffix in [('metadata','.json'),('images','.jpg'),('masks','.png')]):
                     continue
                 stalled=0
-                prior_completed=sum((output/'metadata/train'/(stem+'.json')).exists() for stem in stems)
+                prior_completed=sum((output/'metadata'/args.split/(stem+'.json')).exists() for stem in stems)
                 for attempt in range(10):
                     log = logs/f'render_{name}_{start:04d}_n{size}_attempt{attempt+1}.log'
                     with state_lock:
@@ -106,12 +113,12 @@ def main():
                         run(batch, log, 'REAL_MAP_COMPLETE')
                         break
                     except RuntimeError:
-                        completed=sum((output/'metadata/train'/(stem+'.json')).exists() for stem in stems)
+                        completed=sum((output/'metadata'/args.split/(stem+'.json')).exists() for stem in stems)
                         stalled=stalled+1 if completed<=prior_completed else 0
                         prior_completed=completed
                         if stalled>=3 or attempt==9:raise
                         print(f'RETRY {name} batch {start} after process failure',flush=True)
-                print(f'BATCH_COMPLETE {name} {start+size}/{count}',flush=True)
+                print(f'BATCH_COMPLETE {name} {start+size-args.start}/{count}',flush=True)
             with state_lock:
                 state['active_workers'].pop(name,None)
                 state['completed_maps'].append(name);save()
@@ -120,9 +127,10 @@ def main():
             futures=[pool.submit(render_record,item) for item in records]
             for future in as_completed(futures):future.result()
         state.update(phase='auditing',current_log=str(logs/'audit.log')); save()
-        run([sys.executable, '-u', str(ROOT/'tools/finalize_synthetic_dataset.py'), str(output), '--expected', str(total), '--workers', '4'],
+        finalizer='finalize_anatomy_dataset.py' if args.anatomy else 'finalize_synthetic_dataset.py'
+        run([sys.executable, '-u', str(ROOT/'tools'/finalizer), str(output), '--expected', str(total), '--workers', '4'],
             logs/'audit.log', '"duplicate_images": 0')
-        metadata = [json.loads(p.read_text()) for p in (output/'metadata/train').glob('*.json')]
+        metadata = [json.loads(p.read_text()) for p in (output/'metadata'/args.split).glob('*.json')]
         diversity = {}
         for _, record in records:
             name = record['name'].lower(); subset = [m for m in metadata if m['scene_family'] == name]

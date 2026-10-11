@@ -60,7 +60,10 @@ def process(meta_path):
     boxes=[]; details=[]; omitted=[]
     for actor in meta['actors']:
         body=ids==actor['instance_id']
-        for cls,mask in [(NAMES.index(actor['role']),body),(2,body & (rgb[:,:,1]>127))]:
+        targets=[(NAMES.index(actor['role']),body)]
+        if actor['role']=='enemy':
+            targets.append((2,body & (rgb[:,:,1]>127)))
+        for cls,mask in targets:
             ys,xs=np.where(mask)
             if not len(xs): continue
             x0,x1=int(xs.min()),int(xs.max())+1
@@ -168,7 +171,8 @@ def main():
     report={'images':len(paths),'resolution':list(next(iter(resolutions))),'splits':dict(counts),'scene_families':dict(family_counts),
             'scene_groups':{s:sorted(g) for s,g in split_groups.items()},'characters':dict(sorted(char_counts.items())),
             'duplicate_images':0,'cross_split_scene_overlap':0,'validation':'Every JPEG, mask palette, instance ID, label bound, file count and image hash checked.',
-            'class_names':NAMES,'bbox_convention':'Tight visible-pixel bounds, including clothing/hair/equipment; head of either team.',
+            'class_names':NAMES,'bbox_convention':'Tight visible-pixel bounds, including clothing/hair/equipment; enemy heads only.',
+            'label_policy':'enemy-heads-only-v1',
             'head_definition':'Head/descendant skin weights >= 0.5, restricted by rest-pose and animated head-local envelopes to exclude long hair/scarves; visible surface, not a game hitbox.'}
     metadata=[json.loads(p.read_text()) for p in paths]
     spacing=[float(np.linalg.norm(np.array(a['position'])-np.array(b['position'])))
@@ -193,9 +197,10 @@ def main():
     for meta in metadata:
         objects=annotation_by_index[meta['index']]['objects']
         visible_bodies={o['instance_id'] for o in objects if o['class']!='head'}
+        visible_enemy_bodies={o['instance_id'] for o in objects if o['class']=='enemy'}
         visible_heads={o['instance_id'] for o in objects if o['class']=='head'}
         occlusion['actors_without_visible_body_pixels']+=len(meta['actors'])-len(visible_bodies)
-        occlusion['visible_bodies_without_visible_head_pixels']+=len(visible_bodies-visible_heads)
+        occlusion['visible_enemy_bodies_without_visible_head_pixels']+=len(visible_enemy_bodies-visible_heads)
         for actor in meta['actors']:
             if actor['instance_id'] not in visible_bodies:continue
             dx=meta['camera_position'][0]-actor['position'][0]

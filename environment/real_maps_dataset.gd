@@ -2,6 +2,7 @@ extends "res://center_dataset.gd"
 
 var map_surfaces: Array = []
 var map_name := "ascent"
+var render_split := "train"
 var map_number := 0
 var map_data: Dictionary
 var active_view := 0
@@ -37,20 +38,30 @@ func mask_mode(enabled: bool) -> void:
 
 func setup_map() -> void:
 	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--split="):render_split=arg.trim_prefix("--split=")
 		if arg.begins_with("--map="):map_name=arg.trim_prefix("--map=")
 		if arg.begins_with("--map-number="):map_number=int(arg.trim_prefix("--map-number="))
+	assert(render_split in ["train","val","test"])
 	var folder := ProjectSettings.globalize_path("res://../assets/generated/valorant_maps/"+map_name)
 	map_data=JSON.parse_string(FileAccess.get_file_as_string(folder.path_join("viewpoints.json")))
 	var valid_views: Array=[]
+	var source_view := 0
 	for view in map_data["views"]:
+		view["source_view_id"]=source_view
+		source_view+=1
 		if not playable_surface(map_data["candidates"][int(view["candidate"])]):continue
+		if anatomy_labels:
+			var region: String=str(map_data["candidates"][int(view["candidate"])]["region"])
+			var bucket: int=posmod(region.hash(),20)
+			var region_split := "val" if bucket==0 else "test" if bucket==1 else "train"
+			if region_split!=render_split:continue
 		var targets: Array=[]
 		for target in view["targets"]:
 			if playable_surface(map_data["candidates"][int(target)]):targets.append(target)
 		if targets.size()<3:continue
 		view["targets"]=targets
 		valid_views.append(view)
-	assert(valid_views.size()>100,"Insufficient playable camera viewpoints for "+map_name)
+	assert(valid_views.size()>(10 if anatomy_labels else 100),"Insufficient playable camera viewpoints for "+map_name)
 	map_data["views"]=valid_views
 	var document := GLTFDocument.new()
 	var state := GLTFState.new()
@@ -103,6 +114,7 @@ func place(index: int, local_index: int, attempt: int) -> Array:
 	# A prime stride visits a wide spread of sampled map positions before repeating.
 	active_view=(local_index*7919+attempt*101+map_number*37)%map_data["views"].size()
 	var view: Dictionary=map_data["views"][active_view]
+	if anatomy_labels:active_view=int(view["source_view_id"])
 	var origin: Dictionary=map_data["candidates"][int(view["candidate"])]
 	active_region=origin["region"]
 	var target_id: int=view["targets"][rng.randi_range(0,view["targets"].size()-1)]
@@ -124,6 +136,7 @@ func place(index: int, local_index: int, attempt: int) -> Array:
 	camera.rotate_object_local(Vector3.RIGHT,rng.randf_range(-.018,.018) if centered else rng.randf_range(-.12,.12))
 	camera.rotation.z=rng.randf_range(-.025,.025)
 	var role := "teammate" if local_index%5==1 else "enemy"
+	if anatomy_labels:role="enemy"
 	record.merge({"role":role,"position":[actor.position.x,actor.position.y,actor.position.z],"yaw":actor.rotation.y,"scale":actor.scale.x},true)
 	actor.set_meta("role",role)
 	for item in actor_surfaces:
@@ -189,7 +202,7 @@ func generate() -> void:
 	for local_index in range(first,first+total):
 		var index: int=1000000+map_number*10000+local_index
 		var basename := str(index)
-		var meta_path:=output_dir.path_join("metadata/train/"+basename+".json")
+		var meta_path:=output_dir.path_join("metadata/"+render_split+"/"+basename+".json")
 		if FileAccess.file_exists(meta_path) and not overwrite:continue
 		var group: int=index/50
 		if scene_group!=group:
@@ -215,9 +228,14 @@ func generate() -> void:
 			RenderingServer.force_draw(false)
 			var beauty:=beauty_viewport.get_texture().get_image()
 			var crosshair:=hud(beauty,mask_image,local_index)
-			assert(beauty.save_jpg(output_dir.path_join("images/train/"+basename+".jpg"),.97)==OK)
-			assert(mask_image.save_png(output_dir.path_join("masks/train/"+basename+".png"))==OK)
+			assert(beauty.save_jpg(output_dir.path_join("images/"+render_split+"/"+basename+".jpg"),.97)==OK)
+			assert(mask_image.save_png(output_dir.path_join("masks/"+render_split+"/"+basename+".png"))==OK)
 			var meta: Dictionary={"index":index,"split":"train","scene_group":1000000+map_number*10000+active_view,"scene_family":map_name,"map_viewpoint":active_view,"spatial_region":active_region,"actors":records,"resolution":[400,400],"vertical_fov":camera.fov,"camera_position":[camera.position.x,camera.position.y,camera.position.z],"camera_rotation_degrees":[camera.rotation_degrees.x,camera.rotation_degrees.y,camera.rotation_degrees.z],"purple_srgb":"#b04dbe","generator_version":"real-maps-hud-v1","acceptance_attempt":attempt,"crosshair":crosshair,"pre_hud_body_pixels":body,"pre_hud_head_pixels":head,"sun_rotation_degrees":[sun.rotation_degrees.x,sun.rotation_degrees.y,sun.rotation_degrees.z],"sun_energy":sun.light_energy,"ambient_energy":environment_resource.ambient_light_energy,"placement":{"minimum_player_distance_m":2.8,"screen_envelope_gap_pixels":16.0,"policy":"One actor; real map ground and line-of-sight samples"}}
+			meta["split"]=render_split
+			if anatomy_labels:
+				meta["label_policy"]="enemy-anatomy-v1"
+				meta["scene_group"]=map_number*1000000+active_view
+				meta["mask_encoding"]="R=instance*32; G=visible hair-excluded head; B=visible torso; other surfaces retain depth"
 			meta["crop"]={"source_resolution":[1920,1080],"xyxy":[760,340,1160,740],"method":"Native central perspective subfrustum; no rescaling"}
 			meta["enemy_highlight"]={"rim_strength":2.2,"rim_power":2.5,"upper_bias":.6,"outline_pixels":0,"outline_depth_bias_m":0}
 			meta["render_quality"]={"beauty_msaa":4,"mask_msaa":0,"textures":"Original packed resolution; anisotropic mipmapped filtering","vertex_colors":true,"normal_maps":true}

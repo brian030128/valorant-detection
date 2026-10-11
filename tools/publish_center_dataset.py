@@ -33,6 +33,7 @@ def sha256(path):
 
 def package():
     audit=json.loads((DATA/'audit.json').read_text())
+    anatomy=audit['class_names']==['enemy_body','enemy_head']
     state=json.loads((DATA/'generation_status.json').read_text())
     assert state['phase']=='complete' and audit['images']==state['images'] and audit['images']>0
     (PACKAGE/'archives').mkdir(parents=True,exist_ok=True)
@@ -48,27 +49,38 @@ def package():
     with zipfile.ZipFile(PACKAGE/'archives/dataset_metadata.zip','w',zipfile.ZIP_DEFLATED) as archive:
         for name in ['audit.json','provenance.json','annotations.jsonl','README.txt']:
             archive.write(DATA/name,name)
-        archive.writestr('data.yaml','path: .\ntrain: images/train\nval: images/val\ntest: images/test\nnames:\n  0: enemy\n  1: teammate\n  2: head\n')
+        archive.writestr('data.yaml','path: .\ntrain: images/train\nval: images/val\ntest: images/test\nnames:\n'+''.join(f'  {i}: {name}\n' for i,name in enumerate(audit['class_names'])))
     source=ROOT/'models/valorant-center400-yolo11s-1f23a9a0575e/best.pt'
-    assert sha256(source)=='1bf9746df9ed2b7cc4bdcd9898e56dccebadeab1baad99d2927f72519725cf0a'
+    expected_weight_sha='1bf9746df9ed2b7cc4bdcd9898e56dccebadeab1baad99d2927f72519725cf0a'
+    if anatomy:
+        source=ROOT/'models/valorant-center400-yolo11s-9c592fe4d022/best.pt'
+        expected_weight_sha='25a314556e497f1228713ae1d275cd52ab30940cd4dc876517ef58b14c312f8d'
+    assert sha256(source)==expected_weight_sha
     shutil.copy2(source,PACKAGE/'weights/center400_warmstart.pt')
     info=dict(source_repo='edgeai-lab/valorant-center400-yolo11s',
         source_revision='1f23a9a0575e650360427df0bf5bae03a5384729',source_sha256=sha256(source),
         purpose='Identical trained checkpoint for both controlled fine-tuning arms. Optimizer restarts in both arms.')
     (PACKAGE/'weights/warmstart_info.json').write_text(json.dumps(info,indent=2))
+    if anatomy:
+        info['source_revision']='9c592fe4d0222ee460ffb3cea82f376d99a46d0d'
+        info['purpose']='Transfer compatible features from a three-class checkpoint; the two-class predictor is rebuilt. Do not resume the old three-class optimizer.'
+        (PACKAGE/'weights/warmstart_info.json').write_text(json.dumps(info,indent=2))
     for name in ['train_h100.py','train_synthetic_yolo.py','prepare_center_training.py',
                  'evaluate_center_goal.py','analyze_detection_failures.py','training_progress.py','dataset_progress.py']:
         shutil.copy2(ROOT/'tools'/name,PACKAGE/'tools'/name)
+    if anatomy:shutil.copy2(ROOT/'tools/train_enemy_anatomy.py',PACKAGE/'tools/train_enemy_anatomy.py')
     shutil.copy2(ROOT/'requirements.txt',PACKAGE/'requirements.txt')
     for name in ['preview_scenes.jpg','preview_heads.jpg']:shutil.copy2(DATA/name,PACKAGE/name)
     if (DATA/'preview_new_scenes.jpg').exists():shutil.copy2(DATA/'preview_new_scenes.jpg',PACKAGE/'preview_new_scenes.jpg')
     if (DATA/'scene_catalog').exists():
         shutil.copytree(DATA/'scene_catalog',PACKAGE/'scene_catalog',dirs_exist_ok=True)
     card=(ROOT/'README.md').read_text(encoding='utf-8')
+    if anatomy:card=(DATA/'README.txt').read_text(encoding='utf-8')
     card='---\npretty_name: Valorant detection 400\ntask_categories: [object-detection]\ntags: [yolo, synthetic, valorant]\nsize_categories: [10K<n<100K]\n---\n\n'+card
-    card+='\n## Audited counts\n\n| Split | Images | Enemy | Teammate | Head | Empty |\n|---|---:|---:|---:|---:|---:|\n'
+    columns=['images',*audit['class_names'],'empty_images']
+    card+='\n## Audited counts\n\n| Split | '+' | '.join(columns)+' |\n|---|'+'---:|'*len(columns)+'\n'
     for split,counts in audit['splits'].items():
-        card+='| '+split+' | '+' | '.join(str(counts.get(k,0)) for k in ['images','enemy','teammate','head','empty_images'])+' |\n'
+        card+='| '+split+' | '+' | '.join(str(counts.get(k,0)) for k in columns)+' |\n'
     (PACKAGE/'README.md').write_text(card,encoding='utf-8')
     manifest=dict(dataset=DATA.name,images=audit['images'],resolution=[400,400],class_names=audit['class_names'],
                   created_at=time.time(),files={})
