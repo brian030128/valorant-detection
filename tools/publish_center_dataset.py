@@ -9,8 +9,8 @@ import time
 import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
-DATA=ROOT/'datasets/valorant_detection_400_v4'
-PACKAGE=ROOT/'exports/hf_detection400_v4'
+DATA=ROOT/'datasets/valorant_detection_400_v5'
+PACKAGE=ROOT/'exports/hf_detection400_v5'
 
 
 def token():
@@ -49,11 +49,11 @@ def package():
         for name in ['audit.json','provenance.json','annotations.jsonl','README.txt']:
             archive.write(DATA/name,name)
         archive.writestr('data.yaml','path: .\ntrain: images/train\nval: images/val\ntest: images/test\nnames:\n  0: enemy\n  1: teammate\n  2: head\n')
-    source=ROOT/'models/valorant-center400-yolo11s-8eac3628757f/best.pt'
-    assert sha256(source)=='674bcda891140a430bdd3b9eee06b4ee5ad195d454194a1e354321c69784e9ee'
+    source=ROOT/'models/valorant-center400-yolo11s-1f23a9a0575e/best.pt'
+    assert sha256(source)=='1bf9746df9ed2b7cc4bdcd9898e56dccebadeab1baad99d2927f72519725cf0a'
     shutil.copy2(source,PACKAGE/'weights/center400_warmstart.pt')
     info=dict(source_repo='edgeai-lab/valorant-center400-yolo11s',
-        source_revision='8eac3628757f614b8a5e5bb94bd2b3b4c65be69a',source_sha256=sha256(source),
+        source_revision='1f23a9a0575e650360427df0bf5bae03a5384729',source_sha256=sha256(source),
         purpose='Identical trained checkpoint for both controlled fine-tuning arms. Optimizer restarts in both arms.')
     (PACKAGE/'weights/warmstart_info.json').write_text(json.dumps(info,indent=2))
     for name in ['train_h100.py','train_synthetic_yolo.py','prepare_center_training.py',

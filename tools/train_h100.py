@@ -64,7 +64,8 @@ def main():
         assert audit['source_audit_sha256']==hashlib.sha256((native/'audit.json').read_bytes()).hexdigest()
     all_train=sorted((padded/'images/train').glob('*.png'))
     base_train=[p for p in all_train if int(p.stem)<100000]
-    assert len(base_train)==8000
+    if args.experiment in ['baseline','both'] and len(base_train)!=8000:
+        raise ValueError('This dataset replaces the original training images. Use --experiment targeted; baseline comparisons require a pinned v4 or earlier dataset revision.')
     baseline_list=padded/'baseline_train.txt'
     baseline_list.write_text(''.join(p.as_posix()+'\n' for p in base_train))
     if args.prepare_only:

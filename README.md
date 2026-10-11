@@ -5,7 +5,50 @@ images, character assets, masks, checkpoints and generated results are excluded
 from Git. The private dataset is
 [edgeai-lab/valorant-detection-400](https://huggingface.co/datasets/edgeai-lab/valorant-detection-400).
 
-## Scene expansion (version 4)
+## Real-map regeneration (version 5)
+
+The version-5 pipeline replaces all 30,000 training images with native 400x400
+renders from 11 user-supplied Blender maps: Abyss, Ascent, Bind, Breeze,
+Fracture, Haven, Icebox, Lotus, Pearl, Split, and Sunset. The original 1,000
+validation and 1,000 test images remain byte-for-byte unchanged. Prior datasets
+are retained locally and in Hugging Face revision history.
+
+Godot renders original map geometry and full-resolution packed textures, normal
+maps, and material vertex colors with mipmapped anisotropic filtering and 4x
+MSAA for images. ID masks disable MSAA to preserve exact labels. Complex layered
+Blender materials are approximated; these are synthetic renders, not captures
+from Valorant. Source textures are often 512x512. Camera positions, distances,
+viewing directions, poses, lighting, and six crosshair styles vary. Each image
+contains at most one player. Labels cover visible pixels after geometry and
+opaque crosshair occlusion; fully hidden parts have no label.
+
+To generate and audit supplied maps locally:
+
+```powershell
+python tools/generate_real_maps.py
+python tools/package_real_maps_dataset.py
+python tools/dataset_progress.py --help
+```
+
+Generation resumes completed images and logs each map in the output's `logs`
+folder. `generation_status.json` records the current phase and map;
+`diversity.json` records sampled regions and camera viewpoints per map.
+Downloaded assets and generated datasets are excluded from Git.
+
+To fine-tune on version 5 after downloading it from the private dataset:
+
+```bash
+python tools/train_h100.py --experiment targeted --epochs 20 --batch 64 --workers 8
+```
+
+The packaged warm start is the trained checkpoint at
+`1f23a9a0575e650360427df0bf5bae03a5384729`. Version 5 does not contain the original
+8,000 training images, so baseline comparisons require a pinned older revision.
+The preserved procedural validation/test sets do not measure performance on
+unseen real maps or real gameplay. See `provenance.json` and the labeled map
+previews in `scene_catalog` for the exact dataset contents and limitations.
+
+## Previous scene expansion (version 4)
 
 **32,000 native images: 30,000 train / 1,000 validation / 1,000 test.**
 Version 4 preserves all 20,000 version-3 images and adds 12,000 training images
@@ -55,7 +98,7 @@ git clone https://github.com/brian030128/valorant-detection.git
 cd valorant-detection
 pip install -r requirements.txt
 hf auth login
-python tools/train_h100.py --experiment both --epochs 20 --batch 64 --workers 8
+python tools/train_h100.py --revision 0f32d41612bb5bf13d5b5828b7985b98beb400f7 --experiment both --epochs 20 --batch 64 --workers 8
 ```
 
 Both arms start independently from the identical trained checkpoint from
