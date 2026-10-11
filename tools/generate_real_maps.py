@@ -31,7 +31,7 @@ def main():
     parser.add_argument('--pilot', type=int, default=0, help='Render this many per map instead of the full quotas')
     parser.add_argument('--maps', nargs='*')
     parser.add_argument('--batch-size', type=int, default=500)
-    parser.add_argument('--workers', type=int, choices=[1,2], default=2)
+    parser.add_argument('--workers', type=int, choices=[1,2,3], default=2)
     parser.add_argument('--rerender-map', nargs='*', default=[])
     args = parser.parse_args()
     assert args.batch_size > 0

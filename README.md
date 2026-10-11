@@ -34,8 +34,8 @@ Generation resumes completed images and logs each map in the output's `logs`
 folder. `generation_status.json` records the current phase and map;
 `diversity.json` records sampled regions and camera viewpoints per map.
 Two independent Godot workers render different maps by default, using 500-image
-batches and persistent image/mask render targets. Use `--workers 1` to reduce
-memory usage. Failed batches resume completed frames; retries stop after three
+batches and persistent image/mask render targets. Use `--workers 3` for three
+concurrent maps, or `--workers 1` to reduce memory usage. Failed batches resume completed frames; retries stop after three
 consecutive failures with no progress, or ten attempts for a batch.
 Downloaded assets and generated datasets are excluded from Git.
 
