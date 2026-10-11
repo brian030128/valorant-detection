@@ -7,6 +7,10 @@ var map_data: Dictionary
 var active_view := 0
 var active_region := ""
 var map_root: Node3D
+# Keep both render targets allocated; changing MSAA on every pass can invalidate
+# in-flight rendering resources. Only one viewport draws at a time.
+var beauty_viewport: SubViewport
+var beauty_camera: Camera3D
 
 func vec(values: Array) -> Vector3:
 	return Vector3(values[0],values[2],-values[1])
@@ -20,7 +24,13 @@ func playable_surface(candidate: Dictionary) -> bool:
 	return false
 
 func mask_mode(enabled: bool) -> void:
-	viewport.msaa_3d=Viewport.MSAA_DISABLED if enabled else Viewport.MSAA_4X
+	viewport.render_target_update_mode=SubViewport.UPDATE_ALWAYS if enabled else SubViewport.UPDATE_DISABLED
+	beauty_viewport.render_target_update_mode=SubViewport.UPDATE_DISABLED if enabled else SubViewport.UPDATE_ALWAYS
+	if not enabled:
+		beauty_camera.transform=camera.global_transform
+		beauty_camera.fov=camera.fov
+		beauty_camera.near=camera.near
+		beauty_camera.far=camera.far
 	super.mask_mode(enabled)
 	for item in map_surfaces:
 		item["mesh"].set_surface_override_material(item["surface"],item["mask"] if enabled else item["beauty"])
@@ -168,6 +178,14 @@ func generate() -> void:
 	viewport.size=Vector2i(400,400)
 	camera.fov=rad_to_deg(2*atan(tan(deg_to_rad(70.53)/2)*400.0/1080.0))
 	setup_map()
+	beauty_viewport=SubViewport.new()
+	beauty_viewport.size=viewport.size
+	beauty_viewport.msaa_3d=Viewport.MSAA_4X
+	beauty_viewport.world_3d=viewport.world_3d
+	beauty_viewport.render_target_update_mode=SubViewport.UPDATE_DISABLED
+	add_child(beauty_viewport)
+	beauty_camera=Camera3D.new()
+	beauty_viewport.add_child(beauty_camera)
 	for local_index in range(first,first+total):
 		var index: int=1000000+map_number*10000+local_index
 		var basename := str(index)
@@ -195,7 +213,7 @@ func generate() -> void:
 			mask_mode(false)
 			await get_tree().process_frame
 			RenderingServer.force_draw(false)
-			var beauty:=viewport.get_texture().get_image()
+			var beauty:=beauty_viewport.get_texture().get_image()
 			var crosshair:=hud(beauty,mask_image,local_index)
 			assert(beauty.save_jpg(output_dir.path_join("images/train/"+basename+".jpg"),.97)==OK)
 			assert(mask_image.save_png(output_dir.path_join("masks/train/"+basename+".png"))==OK)
@@ -203,6 +221,7 @@ func generate() -> void:
 			meta["crop"]={"source_resolution":[1920,1080],"xyxy":[760,340,1160,740],"method":"Native central perspective subfrustum; no rescaling"}
 			meta["enemy_highlight"]={"rim_strength":2.2,"rim_power":2.5,"upper_bias":.6,"outline_pixels":0,"outline_depth_bias_m":0}
 			meta["render_quality"]={"beauty_msaa":4,"mask_msaa":0,"textures":"Original packed resolution; anisotropic mipmapped filtering","vertex_colors":true,"normal_maps":true}
+			meta["render_execution"]="persistent-separate-beauty-and-mask-targets-v2"
 			FileAccess.open(meta_path,FileAccess.WRITE).store_string(JSON.stringify(meta))
 			accepted=true
 			break

@@ -28,7 +28,7 @@ def main():
     parser.add_argument('--output', type=Path, default=ROOT/'datasets/valorant_real_maps_30000')
     parser.add_argument('--pilot', type=int, default=0, help='Render this many per map instead of the full quotas')
     parser.add_argument('--maps', nargs='*')
-    parser.add_argument('--batch-size', type=int, default=100)
+    parser.add_argument('--batch-size', type=int, default=500)
     parser.add_argument('--rerender-map', nargs='*', default=[])
     args = parser.parse_args()
     assert args.batch_size > 0
@@ -40,7 +40,12 @@ def main():
     version = digest(converter)
     records = [(i, r) for i, r in enumerate(manifest['maps']) if not args.maps or r['name'].lower() in args.maps]
     total = sum(args.pilot or r['planned_training_images'] for _, r in records)
+    old_state=json.loads((output/'generation_status.json').read_text()) if (output/'generation_status.json').exists() else {}
+    renderer_history=old_state.get('renderer_history',[])
+    if old_state.get('renderer_sha256') and old_state['renderer_sha256'] not in renderer_history:
+        renderer_history.append(old_state['renderer_sha256'])
     state = {'phase': 'converting', 'target': total, 'completed_maps': [], 'started_at': time.time(),
+             'renderer_history':renderer_history,
              'converter_sha256': version, 'renderer_sha256': digest(renderer)}
     def save():
         (output/'generation_status.json').write_text(json.dumps(state, indent=2))
@@ -85,7 +90,7 @@ def main():
                 print(f'BATCH_COMPLETE {name} {start+size}/{count}',flush=True)
             state['completed_maps'].append(name); save()
             print(f'MAP_COMPLETE {name} {len(state["completed_maps"])}/{len(records)}', flush=True)
-        state.update(phase='auditing'); save()
+        state.update(phase='auditing',current_log=str(logs/'audit.log')); save()
         run([sys.executable, '-u', str(ROOT/'tools/finalize_synthetic_dataset.py'), str(output), '--expected', str(total), '--workers', '4'],
             logs/'audit.log', '"duplicate_images": 0')
         metadata = [json.loads(p.read_text()) for p in (output/'metadata/train').glob('*.json')]
