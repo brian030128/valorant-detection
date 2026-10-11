@@ -94,19 +94,26 @@ def main():
     from huggingface_hub import HfApi
     api=HfApi(token=token())
     api.create_repo(args.repo,repo_type='dataset',private=True,exist_ok=True)
-    assert api.dataset_info(args.repo).private,'Refusing to upload private data to a public repository.'
+    previous=api.dataset_info(args.repo)
+    assert previous.private,'Refusing to upload private data to a public repository.'
+    manifest=json.loads((PACKAGE/'manifest.json').read_text())
+    expected=set(manifest['files'])|{'manifest.json'}
+    obsolete=sorted({s.rfilename for s in previous.siblings}-expected-{'.gitattributes'})
     result=api.upload_folder(repo_id=args.repo,repo_type='dataset',folder_path=PACKAGE,
-                             ignore_patterns=['.cache/**'],commit_message='Publish audited '+DATA.name+' with scene-diverse training data')
+                             ignore_patterns=['.cache/**'],delete_patterns=obsolete,
+                             parent_commit=previous.sha,
+                             commit_message='Replace current dataset with audited '+DATA.name)
     info=api.dataset_info(args.repo,files_metadata=True)
     assert info.private
     actual={s.rfilename:s for s in info.siblings}
+    assert set(actual)-{'.gitattributes'}==expected,'Remote file set does not match replacement package'
     manifest=json.loads((PACKAGE/'manifest.json').read_text())
     for relative,entry in manifest['files'].items():
         assert relative in actual,relative
         sibling=actual[relative]
         assert sibling.size==entry['bytes'],relative
         if sibling.lfs:assert sibling.lfs.sha256==entry['sha256'],relative
-    report=dict(repo=args.repo,private=info.private,commit=info.sha,files=len(actual),url=f'https://huggingface.co/datasets/{args.repo}',
+    report=dict(repo=args.repo,private=info.private,commit=info.sha,previous_commit=previous.sha,removed_obsolete_files=len(obsolete),files=len(actual),url=f'https://huggingface.co/datasets/{args.repo}',
                 verification='All listed sizes checked; all LFS SHA-256 hashes matched local package.')
     (ROOT/'exports/hf_upload_result.json').write_text(json.dumps(report,indent=2))
     print(json.dumps(report,indent=2),flush=True)

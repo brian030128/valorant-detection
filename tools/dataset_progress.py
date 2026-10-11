@@ -47,6 +47,11 @@ def snapshot(root, total, log):
     rendered = {split: count_files(root/'metadata'/split, '.json') for split in SPLITS}
     labels = {split: count_files(root/'labels'/split, '.txt') for split in SPLITS}
     audit = read_json(root/'audit.json')
+    job = read_json(root/'generation_status.json') or {}
+    if job.get('current_log'):
+        log = Path(job['current_log'])
+    elif job:
+        log = root/'logs/audit.log'
     tail = log_tail(log)
     validations = re.findall(r'VALIDATED\s+(\d+)/(\d+)', tail)
     checked = int(validations[-1][0]) if validations else 0
@@ -55,10 +60,10 @@ def snapshot(root, total, log):
         checked = total
     previews = all((root/name).is_file() for name in ('preview_scenes.jpg', 'preview_heads.jpg'))
     complete = audit_ok and sum(rendered.values()) == total and sum(labels.values()) == total and previews
-    failure = 'Traceback (most recent call last)' in tail or 'AssertionError' in tail
+    failure = job.get('phase')=='failed' or (not job and ('Traceback (most recent call last)' in tail or 'AssertionError' in tail))
     return {'rendered': rendered, 'labels': labels, 'checked': checked,
             'audit_ok': audit_ok, 'previews': previews, 'complete': complete,
-            'failure': failure, 'audit': audit}
+            'failure': failure, 'audit': audit, 'job': job, 'log': log}
 
 
 def bar(label, count, total, width=36):
@@ -90,7 +95,7 @@ def display(state, root, total, log, rate):
     width = max(8, min(36, columns-50))
     stage = 'COMPLETE' if state['complete'] else 'RENDERING' if sum(state['rendered'].values()) < total else 'LABELING / VALIDATING'
     if state['failure'] and not state['complete']:
-        stage = 'CHECK FAILED - see validation log'
+        stage = 'JOB FAILED - see error below'
     lines = [f'VALORANT DATASET  |  {stage}  |  {time.strftime("%H:%M:%S")}',
              str(root), '',
              bar('Rendered images', sum(state['rendered'].values()), total, width),
@@ -104,8 +109,13 @@ def display(state, root, total, log, rate):
         lines.append(f'Current stage: {rate:.1f} images/s  |  Estimated remaining: {eta//60}m {eta%60:02d}s')
     else:
         lines.append('Validation progress updates every 1,000 images.')
-    lines.append(f'Log: {log}')
-    lines.append('Finished. Dataset ready.' if state['complete'] else 'Ctrl+C stops this monitor only; the dataset job keeps running.')
+    job=state.get('job',{})
+    if job.get('current_map'):lines.append(f'Map: {job["current_map"]}  |  Job: {job.get("phase","unknown")}')
+    if job.get('phase')=='rendering' and 'batch_start' in job:
+        lines.append(f'Batch: {job["batch_start"]+1}-{job["batch_start"]+job["batch_size"]}  |  Attempt: {job.get("attempt",1)}')
+    if job.get('error'):lines.append('Error: '+job['error'])
+    lines.append(f'Log: {state.get("log",log)}')
+    lines.append('Finished. Dataset ready.' if state['complete'] else 'Job stopped; completed images are retained.' if state['failure'] else 'Ctrl+C stops this monitor only; the dataset job keeps running.')
     # Avoid terminal wrapping so cursor-up refreshes replace exactly this block.
     def fit(line):
         if len(line) < columns: return line

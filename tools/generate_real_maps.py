@@ -18,7 +18,8 @@ def run(command, log, marker):
     with log.open('w', encoding='utf-8') as stream:
         process = subprocess.run(command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT,
                                  creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
-    assert process.returncode == 0 and marker in log.read_text(encoding='utf-8', errors='replace'), str(log)
+    if process.returncode != 0 or marker not in log.read_text(encoding='utf-8', errors='replace'):
+        raise RuntimeError(f'Process failed (exit {process.returncode}); see {log}')
 
 
 def main():
@@ -27,7 +28,10 @@ def main():
     parser.add_argument('--output', type=Path, default=ROOT/'datasets/valorant_real_maps_30000')
     parser.add_argument('--pilot', type=int, default=0, help='Render this many per map instead of the full quotas')
     parser.add_argument('--maps', nargs='*')
+    parser.add_argument('--batch-size', type=int, default=100)
+    parser.add_argument('--rerender-map', nargs='*', default=[])
     args = parser.parse_args()
+    assert args.batch_size > 0
     output = args.output.resolve(); output.mkdir(parents=True, exist_ok=True)
     logs = output/'logs'; logs.mkdir(exist_ok=True)
     manifest = json.loads((ROOT/'assets/source/valorant_maps/manifest.json').read_text())
@@ -59,8 +63,26 @@ def main():
             command = [str(ROOT/'tools/godot/Godot_v4.7.2-stable_win64_console.exe'), '--path', str(ROOT/'environment'),
                        '--rendering-method', 'gl_compatibility', '--disable-vsync', '--position', '-10000,-10000',
                        'real_maps_dataset.tscn', '--', f'--map={name}', f'--map-number={number}',
-                       f'--count={count}', f'--output={output.as_posix()}']
-            run(command, logs/f'render_{name}.log', 'REAL_MAP_COMPLETE')
+                       f'--output={output.as_posix()}']
+            for start in range(0, count, args.batch_size):
+                size = min(args.batch_size, count-start)
+                stems = [str(1000000+number*10000+i) for i in range(start,start+size)]
+                if name not in args.rerender_map and all(
+                    (output/folder/'train'/(stem+suffix)).exists()
+                    for stem in stems for folder,suffix in [('metadata','.json'),('images','.jpg'),('masks','.png')]):
+                    continue
+                for attempt in range(3):
+                    log = logs/f'render_{name}_{start:04d}_attempt{attempt+1}.log'
+                    state.update(batch_start=start, batch_size=size, attempt=attempt+1, current_log=str(log)); save()
+                    batch = command+[f'--start={start}',f'--count={size}']
+                    if name in args.rerender_map:batch.append('--overwrite')
+                    try:
+                        run(batch, log, 'REAL_MAP_COMPLETE')
+                        break
+                    except RuntimeError:
+                        if attempt==2:raise
+                        print(f'RETRY {name} batch {start} after process failure',flush=True)
+                print(f'BATCH_COMPLETE {name} {start+size}/{count}',flush=True)
             state['completed_maps'].append(name); save()
             print(f'MAP_COMPLETE {name} {len(state["completed_maps"])}/{len(records)}', flush=True)
         state.update(phase='auditing'); save()
