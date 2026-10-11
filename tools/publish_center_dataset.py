@@ -9,8 +9,8 @@ import time
 import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
-DATA=ROOT/'datasets/valorant_detection_400_v2'
-PACKAGE=ROOT/'exports/hf_detection400_v2'
+DATA=ROOT/'datasets/valorant_detection_400_v3'
+PACKAGE=ROOT/'exports/hf_detection400_v3'
 
 
 def token():
@@ -34,7 +34,7 @@ def sha256(path):
 def package():
     audit=json.loads((DATA/'audit.json').read_text())
     state=json.loads((DATA/'generation_status.json').read_text())
-    assert state['phase']=='complete' and audit['images']==12000
+    assert state['phase']=='complete' and audit['images']==state['images'] and audit['images']>0
     (PACKAGE/'archives').mkdir(parents=True,exist_ok=True)
     (PACKAGE/'weights').mkdir(exist_ok=True)
     (PACKAGE/'tools').mkdir(exist_ok=True)
@@ -61,13 +61,14 @@ def package():
         shutil.copy2(ROOT/'tools'/name,PACKAGE/'tools'/name)
     shutil.copy2(ROOT/'requirements.txt',PACKAGE/'requirements.txt')
     for name in ['preview_scenes.jpg','preview_heads.jpg']:shutil.copy2(DATA/name,PACKAGE/name)
+    if (DATA/'preview_new_scenes.jpg').exists():shutil.copy2(DATA/'preview_new_scenes.jpg',PACKAGE/'preview_new_scenes.jpg')
     card=(ROOT/'README.md').read_text(encoding='utf-8')
     card='---\npretty_name: Valorant detection 400\ntask_categories: [object-detection]\ntags: [yolo, synthetic, valorant]\nsize_categories: [10K<n<100K]\n---\n\n'+card
     card+='\n## Audited counts\n\n| Split | Images | Enemy | Teammate | Head | Empty |\n|---|---:|---:|---:|---:|---:|\n'
     for split,counts in audit['splits'].items():
         card+='| '+split+' | '+' | '.join(str(counts.get(k,0)) for k in ['images','enemy','teammate','head','empty_images'])+' |\n'
     (PACKAGE/'README.md').write_text(card,encoding='utf-8')
-    manifest=dict(dataset='valorant_detection_400_v2',images=audit['images'],resolution=[400,400],class_names=audit['class_names'],
+    manifest=dict(dataset=DATA.name,images=audit['images'],resolution=[400,400],class_names=audit['class_names'],
                   created_at=time.time(),files={})
     for p in sorted(PACKAGE.rglob('*')):
         if p.is_file() and p.name!='manifest.json' and '.cache' not in p.parts:
@@ -77,11 +78,15 @@ def package():
 
 
 def main():
+    global DATA, PACKAGE
     parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--dataset',type=Path,default=DATA)
+    parser.add_argument('--package',type=Path,default=PACKAGE)
     parser.add_argument('--repo',default='edgeai-lab/valorant-detection-400')
     parser.add_argument('--package-only',action='store_true')
     parser.add_argument('--upload-only',action='store_true')
     args=parser.parse_args()
+    DATA=args.dataset.resolve();PACKAGE=args.package.resolve()
     if not args.upload_only:package()
     if args.package_only:return
     from huggingface_hub import HfApi
@@ -89,7 +94,7 @@ def main():
     api.create_repo(args.repo,repo_type='dataset',private=True,exist_ok=True)
     assert api.dataset_info(args.repo).private,'Refusing to upload private data to a public repository.'
     result=api.upload_folder(repo_id=args.repo,repo_type='dataset',folder_path=PACKAGE,
-                             ignore_patterns=['.cache/**'],commit_message='Add 2,000 targeted training images and controlled H100 comparison')
+                             ignore_patterns=['.cache/**'],commit_message='Publish audited '+DATA.name+' with scene-diverse training data')
     info=api.dataset_info(args.repo,files_metadata=True)
     assert info.private
     actual={s.rfilename:s for s in info.siblings}

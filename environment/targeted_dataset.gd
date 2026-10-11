@@ -45,6 +45,9 @@ func center_frame(index: int, attempt: int) -> Array:
 			mat.set_shader_parameter("rim_strength",2.2 if role=="enemy" else .99)
 	return records
 
+func scene_name() -> String:
+	return NEW_MAPS[active_map]
+
 func generate() -> void:
 	base_seed = 20261027
 	viewport.size = Vector2i(CROP_SIZE,CROP_SIZE)
@@ -115,7 +118,7 @@ func generate() -> void:
 				viewport.get_texture().get_image().save_png(output_dir.path_join("context_full_mask.png"))
 				viewport.size = Vector2i(CROP_SIZE,CROP_SIZE)
 				camera.fov = rad_to_deg(2*atan(tan(deg_to_rad(70.53)/2)*float(CROP_SIZE)/1080.0))
-			var meta := {"index":index,"split":split,"scene_group":group,"scene_family":NEW_MAPS[active_map],"scene_seed":base_seed+group*7919,"frame_seed":20261013+(index*20+3)*104729+attempt*15485863,"actors":records,"resolution":[400,400],"vertical_fov":camera.fov,"camera_position":[camera.position.x,camera.position.y,camera.position.z],"camera_rotation_degrees":[camera.rotation_degrees.x,camera.rotation_degrees.y,camera.rotation_degrees.z],"purple_srgb":"#b04dbe","generator_version":"targeted-center400-v1","acceptance_attempt":attempt,"visible_body_pixels":body_pixels,"visible_head_pixels":head_pixels}
+			var meta := {"index":index,"split":split,"scene_group":group,"scene_family":scene_name(),"scene_seed":base_seed+group*7919,"frame_seed":20261013+(index*20+3)*104729+attempt*15485863,"actors":records,"resolution":[400,400],"vertical_fov":camera.fov,"camera_position":[camera.position.x,camera.position.y,camera.position.z],"camera_rotation_degrees":[camera.rotation_degrees.x,camera.rotation_degrees.y,camera.rotation_degrees.z],"purple_srgb":"#b04dbe","generator_version":"targeted-center400-v1","acceptance_attempt":attempt,"visible_body_pixels":body_pixels,"visible_head_pixels":head_pixels}
 			meta["crop"]={"source_resolution":[1920,1080],"xyxy":[760,340,1160,740],"source_vertical_fov":70.53,"method":"Equivalent central perspective subfrustum, no resizing or upscaling"}
 			meta["target_category"] = ["tiny_head","small_head","partial_cover","background_negative"][index%4]
 			meta["head_short_side"] = short_side
