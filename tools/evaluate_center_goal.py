@@ -1,5 +1,6 @@
 """Wait for crop fine-tuning, freeze validation thresholds, test the 99% goal, then resume the previous run."""
 from collections import Counter
+import argparse
 import csv
 import hashlib
 import json
@@ -110,6 +111,13 @@ def assessment(thresholds,validation):
 
 
 def main():
+    global RUN, DATA, OUT
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--run',type=Path,default=RUN)
+    parser.add_argument('--dataset',type=Path,default=DATA)
+    parser.add_argument('--output',type=Path,default=OUT)
+    parser.add_argument('--validation-only',action='store_true')
+    args=parser.parse_args();RUN=args.run.resolve();DATA=args.dataset.resolve();OUT=args.output.resolve()
     OUT.mkdir(parents=True,exist_ok=True)
     state=dict(phase='waiting_for_training',started_at=time.time())
     def update(**values):
@@ -130,6 +138,9 @@ def main():
         update(phase='validation_threshold_selection')
         analyze('val')
         thresholds,validation=freeze_thresholds()
+        if args.validation_only:
+            update(phase='complete',thresholds=validation['thresholds'],metrics=validation['metrics'])
+            print(json.dumps(validation['metrics'],indent=2));return
         update(phase='held_out_test',thresholds=validation['thresholds'])
         analyze('test')
         assessment(thresholds,validation)

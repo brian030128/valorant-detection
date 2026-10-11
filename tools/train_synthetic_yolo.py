@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--skip-test', action='store_true', help='Keep test split reserved during model comparisons.')
     parser.add_argument('--dataset', type=Path, default=ROOT/'datasets/valorant_synthetic_10k')
     parser.add_argument('--init-weights', type=Path)
+    parser.add_argument('--train-list', type=Path, help='Optional training image subset; validation and test stay unchanged.')
     parser.add_argument('--lr0', type=float, default=.001)
     args = parser.parse_args()
     import torch
@@ -35,12 +36,20 @@ def main():
     assert torch.cuda.is_available(), 'CUDA is required for this local training run.'
     dataset = args.dataset.resolve()
     audit = json.loads((dataset/'audit.json').read_text())
-    assert audit['images'] == 10000 and audit['class_names'] == ['enemy','teammate','head']
+    assert audit['images'] > 0 and audit['class_names'] == ['enemy','teammate','head']
     assert audit['cross_split_scene_overlap'] == 0
     run = ROOT/'runs/train'/args.name
     if not args.resume and not args.test_only:
         assert not (run/'weights/last.pt').exists(), 'Run already has weights; use --resume or a different --name.'
     run.mkdir(parents=True, exist_ok=True)
+    data_config=dataset/'data.yaml'
+    if args.train_list:
+        import yaml
+        config=yaml.safe_load(data_config.read_text())
+        config['path']=dataset.as_posix()
+        config['train']=args.train_list.resolve().as_posix()
+        data_config=run/'data.yaml'
+        data_config.write_text(yaml.safe_dump(config))
     status = {'phase':'initializing','pid':os.getpid(),'run_dir':str(run),'started_at':time.time(),
               'epochs_planned':args.epochs,'epochs_completed':0,'epoch':0,'batch':0,'batches_per_epoch':0,
               'model':args.model,'imgsz':args.imgsz,'gpu':torch.cuda.get_device_name(0),'classes':audit['class_names']}
@@ -82,11 +91,11 @@ def main():
         model.add_callback('on_train_epoch_start',epoch_start)
         model.add_callback('on_train_batch_end',batch_end)
         model.add_callback('on_fit_epoch_end',epoch_end)
-        settings=dict(data=str(dataset/'data.yaml'),epochs=args.epochs,imgsz=args.imgsz,batch=args.batch,
+        settings=dict(data=str(data_config),epochs=args.epochs,imgsz=args.imgsz,batch=args.batch,
                       workers=args.workers,device=0,project=str(run.parent),name=run.name,exist_ok=True,
                       patience=args.patience,seed=20261011,deterministic=True,amp=True,
                       optimizer='AdamW',lr0=args.lr0,lrf=.01,cos_lr=True,weight_decay=.0005,
-                      warmup_epochs=3,warmup_bias_lr=0.0,rect=True,cache=False,
+                      warmup_epochs=3,warmup_bias_lr=0.0,rect=args.imgsz!=416,cache=False,
                       hsv_h=0.0,hsv_s=.10,hsv_v=.20,fliplr=.5,flipud=0.,
                       degrees=3.,translate=.08,scale=.25,shear=0.,perspective=0.,
                       mosaic=0.,mixup=0.,cutmix=0.,close_mosaic=0,
@@ -96,6 +105,7 @@ def main():
                   'device':status['gpu'],'pretrained':str(pretrained),'model_docs':'https://docs.ultralytics.com/models/yolo11/',
                   'evaluation_policy':'Best checkpoint selected on val; test used once after training.',
                   'augmentation_policy':'No hue shift or mosaic/mixup; preserve team colors and separated players.'}
+        if args.train_list:manifest['training_subset_sha256']=hashlib.sha256(args.train_list.read_bytes()).hexdigest()
         if pretrained.exists():manifest['pretrained_sha256']=hashlib.sha256(pretrained.read_bytes()).hexdigest()
         if not args.test_only:
             (run/'training_manifest.json').write_text(json.dumps(manifest,indent=2))

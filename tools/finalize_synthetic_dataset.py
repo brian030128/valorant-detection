@@ -44,6 +44,19 @@ def process(meta_path):
                 assert meta['visible_head_pixels']>=meta['sampling']['minimum_head_pixels_when_required']
         else:
             assert not (ids>0).any()
+    if 'target_category' in meta:
+        assert len(meta['actors'])<=1
+        assert int((ids>0).sum())==meta['visible_body_pixels']
+        assert int((rgb[:,:,1]>127).sum())==meta['visible_head_pixels']
+        if meta['actors']:
+            ys,xs=np.where(rgb[:,:,1]>127)
+            assert len(xs)>=3 and (ids>0).sum()>=40
+            side=min(int(xs.max()-xs.min()+1),int(ys.max()-ys.min()+1))
+            assert side==meta['head_short_side']
+            if meta['target_category']=='tiny_head':assert 2<=side<8
+            if meta['target_category']=='small_head':assert 2<=side<16
+            if meta['target_category']=='partial_cover':assert .15<=len(xs)/meta['uncovered_head_pixels']<=.9
+        else:assert not ids.any()
     boxes=[]; details=[]; omitted=[]
     for actor in meta['actors']:
         body=ids==actor['instance_id']
@@ -167,6 +180,7 @@ def main():
     report['generator_versions']=sorted({m.get('generator_version','unknown') for m in metadata})
     if 'crop' in metadata[0]:
         report['crop']=metadata[0]['crop']
+    if 'sampling' in metadata[0]:
         report['sampling']=metadata[0]['sampling'].copy()
         report['sampling'].pop('head_required',None)
         report['sampling']['accepted_after_retry']=sum(m['acceptance_attempt']>0 for m in metadata)
