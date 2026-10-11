@@ -1,0 +1,7 @@
+ultralytics==8.4.175
+huggingface_hub>=0.31.1,<2
+numpy>=1.26,<3
+Pillow>=10
+requests>=2.31
+matplotlib>=3.8
+PyYAML>=6
