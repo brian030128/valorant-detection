@@ -96,9 +96,11 @@ def preview(root, annotations, output, count=24, crops=False):
                 chosen.append((a,o))
     else:
         families=sorted({a['scene_family'] for a in annotations})
-        for family in families:
+        family_budget=min(len(families),count)
+        selected_families=[families[i] for i in np.linspace(0,len(families)-1,family_budget,dtype=int)]
+        for family in selected_families:
             candidates=[a for a in nonempty if a['scene_family']==family]
-            picks=np.linspace(0,len(candidates)-1,min(3,len(candidates)),dtype=int)
+            picks=np.linspace(0,len(candidates)-1,min(3,max(1,count//family_budget),len(candidates)),dtype=int)
             chosen.extend((candidates[i],None) for i in picks)
     sample_size=Image.open(root/'images'/annotations[0]['split']/f"{annotations[0]['index']:06d}.jpg").size
     square=sample_size[0]==sample_size[1]

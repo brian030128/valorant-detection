@@ -5,42 +5,46 @@ images, character assets, masks, checkpoints and generated results are excluded
 from Git. The private dataset is
 [edgeai-lab/valorant-detection-400](https://huggingface.co/datasets/edgeai-lab/valorant-detection-400).
 
-## Scene expansion (version 3)
+## Scene expansion (version 4)
 
-**20,000 native images: 18,000 train / 1,000 validation / 1,000 test.**
-Version 3 preserves all 12,000 version-2 images and adds 8,000 training images
-across eight new scene families, 1,000 images and 20 layouts per family:
+**32,000 native images: 30,000 train / 1,000 validation / 1,000 test.**
+Version 4 preserves all 20,000 version-3 images and adds 12,000 training images
+across **120 scene designs: 20 structural themes ? six spatial layouts**.
+Each design has two independently seeded layouts and 100 images (240 new seeded
+layouts total). This is 120 combinations of geometry and layout, not 120
+independently handcrafted map families.
 
-- Market streets with stalls, awnings, windows and colorful facades.
-- Server rooms with equipment racks and indicator lights.
-- Aircraft hangars with structural beams and simplified aircraft.
-- Wooded paths with trees, canopy shadows and rocks.
-- Canal walks with water, railings and buildings.
-- Parking garages with pillars, parked vehicles and lane markings.
-- Stone ruins with columns, broken walls and rubble.
-- Ice tunnels with irregular walls and ice formations.
+Themes: scaffold canyons, lattice bridges, pipeworks, refinery tanks, steel
+foundries, loading docks, cable tunnels, pallet depots, transit concourses,
+cooling plants, antenna yards, brick quarters, concrete bunkers, solar arrays,
+quarry terraces, timber sawmills, botanical courts, shop arcades, maintenance
+bays and flood barriers. Layouts: parallel lanes, wide courts, staggered islands,
+diagonal bays, stepped setbacks and cross galleries. Geometry, placement,
+lighting, camera angles, characters and distances vary.
 
-The additions contain 2,000 tiny-head samples (shortest visible-box side 2-7 px),
-2,000 small-head samples (under 16 px), 2,000 partial-cover samples verified to
-retain 15-90% of the uncovered head pixels, and 2,000 empty background scenes.
-Enemy and teammate views vary. The new empty scenes are not model-mined.
-
-Version 2 remains in dataset history at revision
-`72bd3da0041dcba7ae43399abb49f193ff89f668`. It added 2,000 images to the original
-10,000: 500 tiny heads, 500 small heads, 500 partial occlusions and 500 background
-negatives ranked from 2,500 candidates. That candidate pool had zero head false
-positives at confidence 0.52 (maximum confidence 0.289).
+The additions contain 2,400 examples each of tiny heads (2?7 px shortest visible
+box side), small heads (2?15 px), normal-scale players, partial cover (15?90% of
+uncovered head pixels), and empty backgrounds. Positive examples contain one
+player; 75% enemy and 25% teammate. Backgrounds are procedural, not model-mined.
+The labeled [scene catalog](scene_catalog/index.html) covers every new design;
+its samples are ground truth, not predictions.
 
 No player stacking. Approved purple remains #B04DBE, strength 2.2, power 2.5,
 upper bias 0.6. Labels bound visible pixels; hidden parts are omitted. Native
 400x400 camera crops are padded to 416x416 for training without resizing.
 
 Original validation and test images, masks, labels and metadata remain
-byte-for-byte unchanged. All new images are training-only. The complete training
-set now contains 20 scene families. The earlier 4,000-image map benchmark stays
-separate but is a known-family regression set after version 2. These existing
-evaluation sets do not establish robustness to wholly unseen scene families or
-real gameplay. A fresh independent evaluation is needed for that claim.
+byte-for-byte unchanged. All additions are training-only. Both 4,000-image map
+benchmarks remain separate. Construction/scaffolding failures informed this
+expansion, so the latest benchmark is now a regression set with known styles,
+not a blind unseen-family test. Existing evaluation does not establish real
+gameplay performance or robustness to wholly unseen styles.
+
+Version 3 (20,000 images) remains in dataset history at
+`f74434b3eae05722fe98bd12f59e3f61070461da`; version 2 (12,000) at
+`72bd3da0041dcba7ae43399abb49f193ff89f668`. The parent history and generator
+hashes are recorded in provenance.json. The full dataset includes the previous
+20 scene families plus the 120 new theme/layout designs.
 
 ## Compare on an H100
 
@@ -56,10 +60,10 @@ python tools/train_h100.py --experiment both --epochs 20 --batch 64 --workers 8
 
 Both arms start independently from the identical trained checkpoint from
 `edgeai-lab/valorant-center400-yolo11s` at revision
-`116b979aa0913d1bfe4ef3714a52434721dbebf5`, reset their optimizers, and use the same
+`8eac3628757f614b8a5e5bb94bd2b3b4c65be69a`, reset their optimizers, and use the same
 seed, learning rate and augmentation settings. At batch 64, the baseline trains
-on the original 8,000 images for 45 epochs (5,625 batches); the targeted arm uses
-18,000 images for 20 epochs (5,640 batches). Early stopping is disabled. This
+on the original 8,000 images for 75 epochs (9,375 batches); the targeted arm uses
+30,000 images for 20 epochs (9,380 batches). Early stopping is disabled. This
 approximately matches batch updates, not exact compute. Square-crop training uses
 shuffled batches to mix the original and added examples. It is a single-seed
 initial experiment, not proof that more data is the bottleneck.
@@ -94,18 +98,18 @@ Valorant performance or a statistically certified 99% success rate.
 ## Reproduce the local additions
 
 Rendering requires Godot 4.7.2 and the existing head-weighted character assets.
-With the audited version-2 dataset under `datasets/valorant_detection_400_v2`, run:
+With the audited version-3 dataset under `datasets/valorant_detection_400_v3`, run:
 
 ```powershell
-$sceneOutput = Join-Path $PWD "datasets/valorant_scenes_8000"
-.\tools\godot\Godot_v4.7.2-stable_win64.exe --path environment res://scene_expansion_dataset.tscn -- --start=200000 --count=8000 "--output=$sceneOutput"
-python tools/merge_scene_expansion.py
+$sceneOutput = Join-Path $PWD "datasets/valorant_120scenes_12000"
+.\tools\godot\Godot_v4.7.2-stable_win64.exe --path environment res://hundred_scenes_dataset.tscn -- --start=600000 --count=12000 "--output=$sceneOutput"
+python tools/merge_hundred_scenes.py
 python tools/publish_center_dataset.py
 ```
 
 Prefer an absolute `--output` path when launching Godot outside this repository.
 The merger checks all images, masks, labels, duplicates and scene splits, then
-verifies held-out file hashes against version 2. It writes a new version-3 folder;
+verifies held-out file hashes against version 3. It writes a new version-4 folder;
 the parent dataset and map benchmark are preserved. `provenance.json` records
 counts, seeds through per-image metadata, generator hash and parent history.
 
@@ -123,11 +127,12 @@ do not grant additional rights to those assets. Generation helpers are Windows
 specific; training, padding, download and evaluation support Linux.
 
 
-## Test the trained model on unseen scene families
+## Reproduce the version-3 unseen-scene test
 
 `environment/unseen_maps_dataset.tscn` renders a separate 4,000-image test-only
 benchmark: greenhouse, power substation, museum gallery and construction site.
-These four families are absent from version-3 training. It replays the original
+These four families are absent from version-3 training. Version 4 incorporates
+related structural styles, so subsequent use is regression testing. It replays the original
 1,000 held-out cameras and character poses in each family, using 20 new layouts
 per family. This isolates changes caused by scenery; the 4,000 frames are not
 independent character/pose samples. Do not add this benchmark to training.

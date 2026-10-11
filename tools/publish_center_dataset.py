@@ -9,8 +9,8 @@ import time
 import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
-DATA=ROOT/'datasets/valorant_detection_400_v3'
-PACKAGE=ROOT/'exports/hf_detection400_v3'
+DATA=ROOT/'datasets/valorant_detection_400_v4'
+PACKAGE=ROOT/'exports/hf_detection400_v4'
 
 
 def token():
@@ -49,11 +49,11 @@ def package():
         for name in ['audit.json','provenance.json','annotations.jsonl','README.txt']:
             archive.write(DATA/name,name)
         archive.writestr('data.yaml','path: .\ntrain: images/train\nval: images/val\ntest: images/test\nnames:\n  0: enemy\n  1: teammate\n  2: head\n')
-    source=ROOT/'models/valorant-center400-yolo11s/best.pt'
-    assert sha256(source)=='8dcda1b95132818411015fc6ca09d5def7569b592e33e6745c96ee48bdf0ee8f'
+    source=ROOT/'models/valorant-center400-yolo11s-8eac3628757f/best.pt'
+    assert sha256(source)=='674bcda891140a430bdd3b9eee06b4ee5ad195d454194a1e354321c69784e9ee'
     shutil.copy2(source,PACKAGE/'weights/center400_warmstart.pt')
     info=dict(source_repo='edgeai-lab/valorant-center400-yolo11s',
-        source_revision='116b979aa0913d1bfe4ef3714a52434721dbebf5',source_sha256=sha256(source),
+        source_revision='8eac3628757f614b8a5e5bb94bd2b3b4c65be69a',source_sha256=sha256(source),
         purpose='Identical trained checkpoint for both controlled fine-tuning arms. Optimizer restarts in both arms.')
     (PACKAGE/'weights/warmstart_info.json').write_text(json.dumps(info,indent=2))
     for name in ['train_h100.py','train_synthetic_yolo.py','prepare_center_training.py',
@@ -62,6 +62,8 @@ def package():
     shutil.copy2(ROOT/'requirements.txt',PACKAGE/'requirements.txt')
     for name in ['preview_scenes.jpg','preview_heads.jpg']:shutil.copy2(DATA/name,PACKAGE/name)
     if (DATA/'preview_new_scenes.jpg').exists():shutil.copy2(DATA/'preview_new_scenes.jpg',PACKAGE/'preview_new_scenes.jpg')
+    if (DATA/'scene_catalog').exists():
+        shutil.copytree(DATA/'scene_catalog',PACKAGE/'scene_catalog',dirs_exist_ok=True)
     card=(ROOT/'README.md').read_text(encoding='utf-8')
     card='---\npretty_name: Valorant detection 400\ntask_categories: [object-detection]\ntags: [yolo, synthetic, valorant]\nsize_categories: [10K<n<100K]\n---\n\n'+card
     card+='\n## Audited counts\n\n| Split | Images | Enemy | Teammate | Head | Empty |\n|---|---:|---:|---:|---:|---:|\n'
