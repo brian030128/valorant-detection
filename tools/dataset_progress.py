@@ -110,6 +110,9 @@ def display(state, root, total, log, rate):
     else:
         lines.append('Validation progress updates every 1,000 images.')
     job=state.get('job',{})
+    active=job.get('active_workers',{})
+    if active:
+        lines.append('Workers: '+' | '.join(f'{name} {p["batch_start"]+1}-{p["batch_start"]+p["batch_size"]} (try {p["attempt"]})' for name,p in sorted(active.items())))
     if job.get('current_map'):lines.append(f'Map: {job["current_map"]}  |  Job: {job.get("phase","unknown")}')
     if job.get('phase')=='rendering' and 'batch_start' in job:
         lines.append(f'Batch: {job["batch_start"]+1}-{job["batch_start"]+job["batch_size"]}  |  Attempt: {job.get("attempt",1)}')

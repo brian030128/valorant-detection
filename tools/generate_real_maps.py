@@ -1,5 +1,7 @@
 """Convert supplied Blender maps and render resumable, native 400px Godot samples."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 import hashlib
 import json
 import subprocess
@@ -29,6 +31,7 @@ def main():
     parser.add_argument('--pilot', type=int, default=0, help='Render this many per map instead of the full quotas')
     parser.add_argument('--maps', nargs='*')
     parser.add_argument('--batch-size', type=int, default=500)
+    parser.add_argument('--workers', type=int, choices=[1,2], default=2)
     parser.add_argument('--rerender-map', nargs='*', default=[])
     args = parser.parse_args()
     assert args.batch_size > 0
@@ -45,10 +48,20 @@ def main():
     if old_state.get('renderer_sha256') and old_state['renderer_sha256'] not in renderer_history:
         renderer_history.append(old_state['renderer_sha256'])
     state = {'phase': 'converting', 'target': total, 'completed_maps': [], 'started_at': time.time(),
-             'renderer_history':renderer_history,
+             'renderer_history':renderer_history, 'worker_limit':args.workers, 'active_workers':{},
              'converter_sha256': version, 'renderer_sha256': digest(renderer)}
+    state_lock=threading.RLock()
     def save():
-        (output/'generation_status.json').write_text(json.dumps(state, indent=2))
+        with state_lock:
+            temporary=output/'generation_status.tmp'
+            temporary.write_text(json.dumps(state, indent=2))
+            for retry in range(5):
+                try:
+                    temporary.replace(output/'generation_status.json')
+                    break
+                except PermissionError:
+                    if retry==4:raise
+                    time.sleep(.05)
     save()
     try:
         for number, record in records:
@@ -63,7 +76,10 @@ def main():
             report = json.loads((folder/'conversion.json').read_text())
             assert report['source_sha256'] == record['sha256']
             assert report['viewpoints'] > 100
-            state.update(phase='rendering', current_map=name); save()
+        state.update(phase='rendering');save()
+        def render_record(item):
+            number,record=item
+            name=record['name'].lower()
             count = args.pilot or record['planned_training_images']
             command = [str(ROOT/'tools/godot/Godot_v4.7.2-stable_win64_console.exe'), '--path', str(ROOT/'environment'),
                        '--rendering-method', 'gl_compatibility', '--disable-vsync', '--position', '-10000,-10000',
@@ -76,20 +92,33 @@ def main():
                     (output/folder/'train'/(stem+suffix)).exists()
                     for stem in stems for folder,suffix in [('metadata','.json'),('images','.jpg'),('masks','.png')]):
                     continue
-                for attempt in range(3):
-                    log = logs/f'render_{name}_{start:04d}_attempt{attempt+1}.log'
-                    state.update(batch_start=start, batch_size=size, attempt=attempt+1, current_log=str(log)); save()
+                stalled=0
+                prior_completed=sum((output/'metadata/train'/(stem+'.json')).exists() for stem in stems)
+                for attempt in range(10):
+                    log = logs/f'render_{name}_{start:04d}_n{size}_attempt{attempt+1}.log'
+                    with state_lock:
+                        progress=dict(current_map=name,batch_start=start,batch_size=size,attempt=attempt+1,current_log=str(log))
+                        state['active_workers'][name]=progress
+                        state.update(progress);save()
                     batch = command+[f'--start={start}',f'--count={size}']
                     if name in args.rerender_map:batch.append('--overwrite')
                     try:
                         run(batch, log, 'REAL_MAP_COMPLETE')
                         break
                     except RuntimeError:
-                        if attempt==2:raise
+                        completed=sum((output/'metadata/train'/(stem+'.json')).exists() for stem in stems)
+                        stalled=stalled+1 if completed<=prior_completed else 0
+                        prior_completed=completed
+                        if stalled>=3 or attempt==9:raise
                         print(f'RETRY {name} batch {start} after process failure',flush=True)
                 print(f'BATCH_COMPLETE {name} {start+size}/{count}',flush=True)
-            state['completed_maps'].append(name); save()
-            print(f'MAP_COMPLETE {name} {len(state["completed_maps"])}/{len(records)}', flush=True)
+            with state_lock:
+                state['active_workers'].pop(name,None)
+                state['completed_maps'].append(name);save()
+                print(f'MAP_COMPLETE {name} {len(state["completed_maps"])}/{len(records)}',flush=True)
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futures=[pool.submit(render_record,item) for item in records]
+            for future in as_completed(futures):future.result()
         state.update(phase='auditing',current_log=str(logs/'audit.log')); save()
         run([sys.executable, '-u', str(ROOT/'tools/finalize_synthetic_dataset.py'), str(output), '--expected', str(total), '--workers', '4'],
             logs/'audit.log', '"duplicate_images": 0')
