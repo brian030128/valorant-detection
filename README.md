@@ -121,3 +121,32 @@ Character assets were obtained from Kingdom Archives. Underlying game assets and
 trademarks belong to their respective owners; this repository and private dataset
 do not grant additional rights to those assets. Generation helpers are Windows
 specific; training, padding, download and evaluation support Linux.
+
+
+## Test the trained model on unseen scene families
+
+`environment/unseen_maps_dataset.tscn` renders a separate 4,000-image test-only
+benchmark: greenhouse, power substation, museum gallery and construction site.
+These four families are absent from version-3 training. It replays the original
+1,000 held-out cameras and character poses in each family, using 20 new layouts
+per family. This isolates changes caused by scenery; the 4,000 frames are not
+independent character/pose samples. Do not add this benchmark to training.
+
+```powershell
+$testOutput = Join-Path $PWD "datasets/valorant_unseen_maps_4000"
+.\tools\godot\Godot_v4.7.2-stable_win64.exe --path environment res://unseen_maps_dataset.tscn -- --count=1000 "--output=$testOutput"
+python tools/finalize_synthetic_dataset.py datasets/valorant_unseen_maps_4000 --expected 4000
+python tools/evaluate_map_shift.py --model models/valorant-center400-yolo11s-8eac3628757f --dataset datasets/valorant_unseen_maps_4000 --training-dataset datasets/valorant_detection_400_v3 --output runs/analysis/unseen_maps_8eac3628757f
+```
+
+The model directory above contains the checkpoint and configuration downloaded
+from `edgeai-lab/valorant-center400-yolo11s` at immutable revision
+`8eac3628757f614b8a5e5bb94bd2b3b4c65be69a`. Evaluation uses its saved thresholds
+(enemy 0.82, teammate 0.53, head 0.53), 416-pixel padded input, NMS IoU 0.70,
+and class-aware matching at IoU 0.50. No new-map threshold tuning is performed.
+
+The evaluator verifies replay metadata, checks that scene families are absent
+from training, reproduces the original test as a control, and reports all-frame
+results plus paired subsets where both body and head masks retain IoU >=0.95
+against the original. Reports include head recall by size and diagnostic labeled
+images in `index.html`. Best/worst example selection does not alter metrics.
