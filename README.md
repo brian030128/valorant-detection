@@ -155,3 +155,45 @@ from training, reproduces the original test as a control, and reports all-frame
 results plus paired subsets where both body and head masks retain IoU >=0.95
 against the original. Reports include head recall by size and diagnostic labeled
 images in `index.html`. Best/worst example selection does not alter metrics.
+
+
+## Paired texture and crosshair stress test
+
+`environment/texture_test_dataset.tscn` renders four test-only procedural scenes:
+atrium, ceramic passage, weathered service yard and painted arcade. Each replays
+1,000 original held-out poses across 20 layout seeds. Materials use world-space
+concrete, brick, tile, wood grain, rust, hazard stripes, graffiti and mosaic
+patterns. These are procedural stress textures, not photographic assets.
+
+Render twice to separate folders, with and without `--flat`; the generator keeps
+geometry, camera, character and lighting identical. Audit both before evaluating:
+
+```powershell
+$textureOutput = Join-Path $PWD "datasets/valorant_texture_test_4000"
+$flatOutput = Join-Path $PWD "datasets/valorant_texture_flat_4000"
+.\tools\godot\Godot_v4.7.2-stable_win64.exe --path environment res://texture_test_dataset.tscn -- --count=1000 "--output=$textureOutput"
+.\tools\godot\Godot_v4.7.2-stable_win64.exe --path environment res://texture_test_dataset.tscn -- --count=1000 --flat "--output=$flatOutput"
+python tools/finalize_synthetic_dataset.py $textureOutput --expected 4000
+python tools/finalize_synthetic_dataset.py $flatOutput --expected 4000
+python tools/evaluate_texture_crosshairs.py --textured $textureOutput --flat $flatOutput --model models/valorant-center400-yolo11s-1f23a9a0575e --output runs/analysis/texture_crosshairs_1f23a9a0575e
+```
+
+The evaluator verifies all 4,000 paired masks and replay metadata are identical.
+It uses the model's saved thresholds, native 400px images padded to 416, and
+class-aware IoU 0.50 matching. It overlays five opaque synthetic center HUDs:
+a 3px green dot, a 13px thin white cross, an open cyan cross, a larger purple
+cross, and an outlined white cross, plus a no-HUD control. Pixels are native
+screen pixels, without image resizing. Labels exclude opaque HUD pixels;
+fully hidden heads are omitted. Reports also retain scores against pre-HUD
+labels and head-overlap subsets with matched no-HUD controls, so label policy
+changes are visible. Only diagnostic examples are selected for the gallery;
+metrics include all frames. All these images remain test-only and excluded
+from the published training dataset. Source poses and layouts are correlated.
+
+
+Repeat the evaluator with `--hud-source flat` and a different `--output` folder
+to isolate crosshair effects from texture failures. The complete factorial test
+is 4,000 paired scene/pose samples ? two material conditions ? six HUD conditions
+(48,000 inference inputs, derived from 8,000 renders). Use fresh output folders
+when changing evaluator code; prediction caches deliberately reject different
+implementation hashes.
