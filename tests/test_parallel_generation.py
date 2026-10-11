@@ -7,6 +7,16 @@ import pytest
 from tools import generate_real_maps as generator
 
 
+def test_script_error_rejects_success_exit_and_completion_marker(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    def fake_process(command, **kwargs):
+        kwargs['stdout'].write('SCRIPT ERROR: Assertion failed\nREAL_MAP_COMPLETE\n')
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(generator.subprocess,'run',fake_process)
+    with pytest.raises(RuntimeError):
+        generator.run(['godot'],tmp_path/'render.log','REAL_MAP_COMPLETE')
+
+
 @pytest.mark.parametrize('workers',[2,3])
 @pytest.mark.parametrize('start,split',[(0,'train'),(5000,'test')])
 def test_workers_overlap_without_sharing_frame_ids(tmp_path, monkeypatch, workers, start, split):

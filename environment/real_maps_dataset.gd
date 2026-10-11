@@ -61,7 +61,10 @@ func setup_map() -> void:
 		if targets.size()<3:continue
 		view["targets"]=targets
 		valid_views.append(view)
-	assert(valid_views.size()>(10 if anatomy_labels else 100),"Insufficient playable camera viewpoints for "+map_name)
+	if valid_views.is_empty():
+		push_error("No playable camera viewpoints for "+map_name+" / "+render_split)
+		get_tree().quit(1)
+		return
 	map_data["views"]=valid_views
 	var document := GLTFDocument.new()
 	var state := GLTFState.new()
@@ -191,6 +194,7 @@ func generate() -> void:
 	viewport.size=Vector2i(400,400)
 	camera.fov=rad_to_deg(2*atan(tan(deg_to_rad(70.53)/2)*400.0/1080.0))
 	setup_map()
+	if not is_instance_valid(map_root):return
 	beauty_viewport=SubViewport.new()
 	beauty_viewport.size=viewport.size
 	beauty_viewport.msaa_3d=Viewport.MSAA_4X

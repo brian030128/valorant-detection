@@ -20,7 +20,8 @@ def run(command, log, marker):
     with log.open('w', encoding='utf-8') as stream:
         process = subprocess.run(command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT,
                                  creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
-    if process.returncode != 0 or marker not in log.read_text(encoding='utf-8', errors='replace'):
+    output=log.read_text(encoding='utf-8',errors='replace')
+    if process.returncode != 0 or marker not in output or 'SCRIPT ERROR:' in output:
         raise RuntimeError(f'Process failed (exit {process.returncode}); see {log}')
 
 

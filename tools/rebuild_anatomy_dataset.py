@@ -11,7 +11,7 @@ import time
 ROOT=Path(__file__).resolve().parents[1]
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--publish',action='store_true');args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--publish',action='store_true');p.add_argument('--assemble-only',action='store_true');args=p.parse_args()
     output=ROOT/'datasets/valorant_detection_400_v6';output.mkdir(parents=True,exist_ok=True)
     status=output/'generation_status.json'
     def state(phase,**extra):
@@ -22,8 +22,9 @@ def main():
         for split,count,start in [('val',1000,6000),('test',1000,7000),('train',30000,0)]:
             renders=ROOT/f'datasets/valorant_anatomy_{split}'
             state('rendering',split=split,active_dataset=str(renders))
-            run('generate_real_maps.py','--anatomy','--split',split,'--start',start,'--total-images',count,
-                '--workers',3,'--output',renders)
+            if not args.assemble_only:
+                run('generate_real_maps.py','--anatomy','--split',split,'--start',start,'--total-images',count,
+                    '--workers',3,'--output',renders)
             for kind in ['images','masks','metadata']:
                 shutil.copytree(renders/kind/split,output/kind/split,dirs_exist_ok=True)
         state('auditing')
