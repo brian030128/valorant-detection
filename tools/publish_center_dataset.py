@@ -65,10 +65,11 @@ def package():
         info['source_revision']='9c592fe4d0222ee460ffb3cea82f376d99a46d0d'
         info['purpose']='Transfer compatible features from a three-class checkpoint; the two-class predictor is rebuilt. Do not resume the old three-class optimizer.'
         (PACKAGE/'weights/warmstart_info.json').write_text(json.dumps(info,indent=2))
-    for name in ['train_h100.py','train_synthetic_yolo.py','prepare_center_training.py',
-                 'evaluate_center_goal.py','analyze_detection_failures.py','training_progress.py','dataset_progress.py']:
+    tool_names=['train_enemy_anatomy.py','dataset_io.py','prepare_center_training.py'] if anatomy else [
+        'train_h100.py','train_synthetic_yolo.py','prepare_center_training.py',
+        'evaluate_center_goal.py','analyze_detection_failures.py','training_progress.py','dataset_progress.py']
+    for name in tool_names:
         shutil.copy2(ROOT/'tools'/name,PACKAGE/'tools'/name)
-    if anatomy:shutil.copy2(ROOT/'tools/train_enemy_anatomy.py',PACKAGE/'tools/train_enemy_anatomy.py')
     shutil.copy2(ROOT/'requirements.txt',PACKAGE/'requirements.txt')
     for name in ['preview_scenes.jpg','preview_heads.jpg']:shutil.copy2(DATA/name,PACKAGE/name)
     if (DATA/'preview_new_scenes.jpg').exists():shutil.copy2(DATA/'preview_new_scenes.jpg',PACKAGE/'preview_new_scenes.jpg')

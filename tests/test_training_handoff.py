@@ -8,7 +8,7 @@ import zipfile
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 from analyze_detection_failures import match
 from evaluate_center_goal import evaluate,wilson
-from train_h100 import extract,verify
+from dataset_io import extract,verify
 
 
 class HandoffTests(unittest.TestCase):

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from train_h100 import extract,verify
+from dataset_io import extract,verify
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--repo',default='edgeai-lab/valorant-detection-400')
