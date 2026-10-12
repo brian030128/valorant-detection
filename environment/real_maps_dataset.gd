@@ -3,6 +3,20 @@ extends "res://center_dataset.gd"
 var map_surfaces: Array = []
 var map_name := "ascent"
 var render_split := "train"
+var teammate_negatives := false
+
+func negative_mix_role(local_index: int) -> String:
+	# Shuffle a balanced 20-frame block independently of pose/camera/HUD RNG.
+	var sampler := RandomNumberGenerator.new()
+	sampler.seed=9137+map_number*104729+(local_index/20)*15485863
+	var roles: Array[String]=[]
+	for i in 20:roles.append("background" if i<3 else "teammate" if i<8 else "enemy")
+	for i in range(19,0,-1):
+		var j:=sampler.randi_range(0,i)
+		var temporary:=roles[i]
+		roles[i]=roles[j]
+		roles[j]=temporary
+	return roles[local_index%20]
 var map_number := 0
 var map_data: Dictionary
 var active_view := 0
@@ -38,6 +52,7 @@ func mask_mode(enabled: bool) -> void:
 
 func setup_map() -> void:
 	for arg in OS.get_cmdline_user_args():
+		if arg=="--teammate-negatives":teammate_negatives=true
 		if arg.begins_with("--split="):render_split=arg.trim_prefix("--split=")
 		if arg.begins_with("--map="):map_name=arg.trim_prefix("--map=")
 		if arg.begins_with("--map-number="):map_number=int(arg.trim_prefix("--map-number="))
@@ -140,14 +155,22 @@ func place(index: int, local_index: int, attempt: int) -> Array:
 	camera.rotation.z=rng.randf_range(-.025,.025)
 	var role := "teammate" if local_index%5==1 else "enemy"
 	if anatomy_labels:role="enemy"
+	if teammate_negatives:role=negative_mix_role(local_index)
+	var ally_strength := 0.99
+	if teammate_negatives:
+		# Include ordinary visible teammates, not only conspicuous cyan silhouettes.
+		ally_strength=0.0 if rng.randf()<.5 else rng.randf_range(.35,1.15)
 	record.merge({"role":role,"position":[actor.position.x,actor.position.y,actor.position.z],"yaw":actor.rotation.y,"scale":actor.scale.x},true)
+	if teammate_negatives:
+		record["highlight_style"]="purple" if role=="enemy" else "none" if ally_strength==0 else "cyan"
+		record["highlight_strength"]=2.2 if role=="enemy" else ally_strength
 	actor.set_meta("role",role)
 	for item in actor_surfaces:
 		item["mask"].set_shader_parameter("head_world_to_local",head_transforms[item["actor"]])
 		var material: Material=item["beauty"]
 		if material is ShaderMaterial:
 			material.set_shader_parameter("rim_color",PURPLE if role=="enemy" else ALLY)
-			material.set_shader_parameter("rim_strength",2.2 if role=="enemy" else .99)
+			material.set_shader_parameter("rim_strength",2.2 if role=="enemy" else ally_strength)
 	# Daylight range plus ambient lighting for indoor regions; retain original map textures.
 	sky_color=Color("9eb6c9").lerp(Color("d5c4b0"),rng.randf()*.45)
 	environment_resource.ambient_light_color=Color.WHITE
@@ -155,7 +178,7 @@ func place(index: int, local_index: int, attempt: int) -> Array:
 	sun.rotation_degrees=Vector3(rng.randf_range(-72,-30),rng.randf_range(-180,180),0)
 	sun.light_color=Color("ffe9d0").lerp(Color("d7e9ff"),rng.randf())
 	sun.light_energy=rng.randf_range(.9,1.35)
-	if local_index%20 in [0,9,19]:
+	if (teammate_negatives and role=="background") or (not teammate_negatives and local_index%20 in [0,9,19]):
 		for a in actors:a.visible=false
 		return []
 	return records
@@ -238,6 +261,7 @@ func generate() -> void:
 			meta["split"]=render_split
 			if anatomy_labels:
 				meta["label_policy"]="enemy-anatomy-v1"
+				if teammate_negatives:meta["label_policy"]="enemy-anatomy-teammate-negatives-v2"
 				meta["scene_group"]=map_number*1000000+active_view
 				meta["mask_encoding"]="R=instance*32; G=visible hair-excluded head; B=visible torso; other surfaces retain depth"
 			meta["crop"]={"source_resolution":[1920,1080],"xyxy":[760,340,1160,740],"method":"Native central perspective subfrustum; no rescaling"}

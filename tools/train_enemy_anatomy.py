@@ -27,11 +27,12 @@ def main():
     if not (padded/'audit.json').exists():
         subprocess.run([sys.executable,'tools/prepare_center_training.py','--source',str(native),'--dest',str(padded)],check=True)
     from ultralytics import YOLO
-    # Ultralytics rebuilds the class predictor for nc=2; compatible backbone/neck weights transfer.
+    # Transfer the checkpoint; Ultralytics adapts the predictor if its class count differs.
     model=YOLO(str(package/'weights/center400_warmstart.pt'))
     model.train(data=str(padded.resolve()/'data.yaml'),imgsz=416,epochs=args.epochs,batch=args.batch,
                 workers=args.workers,device=0,name=args.name,seed=42,patience=10,lr0=.0003,
-                fliplr=.5,flipud=0,mosaic=0,mixup=0,scale=0,degrees=0,translate=0)
+                fliplr=.5,flipud=0,mosaic=0,mixup=0,scale=0,degrees=0,translate=0,
+                hsv_h=0,hsv_s=.1,hsv_v=.2)
     best=YOLO(str(model.trainer.best))
     result=best.val(data=str(padded.resolve()/'data.yaml'),split='test' if args.test else 'val',imgsz=416,device=0)
     print(json.dumps(dict(class_names=best.names,metrics=result.results_dict),indent=2))

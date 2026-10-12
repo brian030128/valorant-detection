@@ -11,8 +11,11 @@ import time
 ROOT=Path(__file__).resolve().parents[1]
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--publish',action='store_true');p.add_argument('--assemble-only',action='store_true');args=p.parse_args()
-    output=ROOT/'datasets/valorant_detection_400_v6';output.mkdir(parents=True,exist_ok=True)
+    p=argparse.ArgumentParser();p.add_argument('--publish',action='store_true');p.add_argument('--assemble-only',action='store_true')
+    p.add_argument('--teammate-negatives',action='store_true');args=p.parse_args()
+    version='v7' if args.teammate_negatives else 'v6'
+    policy='enemy-anatomy-teammate-negatives-v2' if args.teammate_negatives else 'enemy-anatomy-v1'
+    output=ROOT/f'datasets/valorant_detection_400_{version}';output.mkdir(parents=True,exist_ok=True)
     status=output/'generation_status.json'
     def state(phase,**extra):
         status.write_text(json.dumps(dict(phase=phase,target=32000,updated_at=time.time(),**extra),indent=2))
@@ -20,11 +23,11 @@ def main():
         subprocess.run([sys.executable,'-u',str(ROOT/'tools'/script),*map(str,arguments)],cwd=ROOT,check=True)
     try:
         for split,count,start in [('val',1000,6000),('test',1000,7000),('train',30000,0)]:
-            renders=ROOT/f'datasets/valorant_anatomy_{split}'
+            renders=ROOT/(f'datasets/valorant_anatomy_v7_{split}' if args.teammate_negatives else f'datasets/valorant_anatomy_{split}')
             state('rendering',split=split,active_dataset=str(renders))
             if not args.assemble_only:
                 run('generate_real_maps.py','--anatomy','--split',split,'--start',start,'--total-images',count,
-                    '--workers',3,'--output',renders)
+                    '--workers',3,'--output',renders,*(['--teammate-negatives'] if args.teammate_negatives else []))
             for kind in ['images','masks','metadata']:
                 shutil.copytree(renders/kind/split,output/kind/split,dirs_exist_ok=True)
         state('auditing')
@@ -36,11 +39,16 @@ def main():
             for b,s in regions.items():
                 if a!=b:assert not r&s
         assert len({a['character'] for m in metas for a in m['actors']})==29
-        assert all(a['role']=='enemy' for m in metas for a in m['actors'])
+        assert all(m['label_policy']==policy for m in metas)
+        if args.teammate_negatives:
+            for role in ['enemy','teammate']:
+                assert len({a['character'] for m in metas if m['split']=='train' for a in m['actors'] if a['role']==role})==29
+            assert {a['highlight_style'] for m in metas for a in m['actors'] if a['role']=='teammate'}=={'none','cyan'}
+        else:assert all(a['role']=='enemy' for m in metas for a in m['actors'])
         assert len({m['crosshair']['style'] for m in metas})==6
-        provenance=dict(parent_hf_revision='6563471bb7a35b6ec553f76597e61730118dca05',all_images_regenerated=True,
+        provenance=dict(parent_hf_revision='9496be356911c9b0e21be062038490674f9d5722' if args.teammate_negatives else '6563471bb7a35b6ec553f76597e61730118dca05',all_images_regenerated=True,
                         source_maps=json.loads((ROOT/'assets/source/valorant_maps/manifest.json').read_text()),
-                        label_policy='enemy-anatomy-v1',map_counts=dict(Counter(m['scene_family'] for m in metas)),
+                        label_policy=policy,map_counts=dict(Counter(m['scene_family'] for m in metas)),
                         region_counts={s:len(r) for s,r in regions.items()},cross_split_camera_region_overlap=0,
                         limitations='All splits share the same map assets. Camera regions are disjoint; target positions may overlap. Skin/material-based anatomy masks are approximations, not verified game hitboxes.')
         (output/'provenance.json').write_text(json.dumps(provenance,indent=2))
@@ -60,10 +68,19 @@ Install requirements.txt and CUDA-enabled PyTorch. Set HF_TOKEN in the environme
 
 The script pads images to 416 without rescaling, transfers compatible pretrained features and rebuilds the two-class predictor. It evaluates validation by default. Use --test only after selecting the model; do not tune on test results. Do not resume the old three-class training run.
 ''',encoding='utf-8')
-        shutil.copytree(ROOT/'datasets/anatomy_review_v1/character_review',output/'scene_catalog',dirs_exist_ok=True)
+        if not args.teammate_negatives:
+            shutil.copytree(ROOT/'datasets/anatomy_review_v1/character_review',output/'scene_catalog',dirs_exist_ok=True)
+        if args.teammate_negatives:
+            card=(output/'README.txt').read_text(encoding='utf-8')
+            card=card.replace('(v6)','(v7)').replace('No teammates appear in the scenes; empty backgrounds are included.',
+                'Approximately 60% enemy scenes, 25% teammate-only scenes and 15% empty backgrounds. All 29 characters occur on both teams. Teammates have EMPTY labels (no body/head targets), using no highlight or a varied cyan rim. These are synthetic appearance variants, not exact game teammate shaders.')
+            card=card.replace('transfers compatible pretrained features and rebuilds the two-class predictor',
+                'fine-tunes the existing two-class anatomy checkpoint with teammate negatives')
+            (output/'README.txt').write_text(card,encoding='utf-8')
+            run('build_teammate_review.py',output)
         state('complete',images=32000)
         if args.publish:
-            run('publish_center_dataset.py','--dataset',output,'--package',ROOT/'exports/hf_detection400_v6')
+            run('publish_center_dataset.py','--dataset',output,'--package',ROOT/f'exports/hf_detection400_{version}')
             state('published',images=32000)
         print('ANATOMY_REBUILD_COMPLETE',flush=True)
     except BaseException as error:

@@ -28,6 +28,7 @@ def run(command, log, marker):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--anatomy',action='store_true')
+    parser.add_argument('--teammate-negatives',action='store_true')
     parser.add_argument('--total-images',type=int,help='Distribute exactly this many images across selected maps.')
     parser.add_argument('--blender', type=Path, default=Path('C:/Program Files/Blender Foundation/Blender 5.2/blender.exe'))
     parser.add_argument('--output', type=Path, default=ROOT/'datasets/valorant_real_maps_30000')
@@ -39,6 +40,7 @@ def main():
     parser.add_argument('--workers', type=int, choices=[1,2,3], default=2)
     parser.add_argument('--rerender-map', nargs='*', default=[])
     args = parser.parse_args()
+    if args.teammate_negatives and not args.anatomy:parser.error('--teammate-negatives requires --anatomy')
     assert args.batch_size > 0 and args.start >= 0
     output = args.output.resolve(); output.mkdir(parents=True, exist_ok=True)
     logs = output/'logs'; logs.mkdir(exist_ok=True)
@@ -93,6 +95,7 @@ def main():
                        'real_maps_dataset.tscn', '--', f'--map={name}', f'--map-number={number}',
                        f'--output={output.as_posix()}',f'--split={args.split}']
             if args.anatomy:command.append('--anatomy')
+            if args.teammate_negatives:command.append('--teammate-negatives')
             for start in range(args.start, args.start+count, args.batch_size):
                 size = min(args.batch_size, args.start+count-start)
                 stems = [str(1000000+number*10000+i) for i in range(start,start+size)]

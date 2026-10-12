@@ -55,6 +55,10 @@ def package():
     if anatomy:
         source=ROOT/'models/valorant-center400-yolo11s-9c592fe4d022/best.pt'
         expected_weight_sha='25a314556e497f1228713ae1d275cd52ab30940cd4dc876517ef58b14c312f8d'
+    negatives=audit.get('label_policy')=='enemy-anatomy-teammate-negatives-v2'
+    if negatives:
+        source=ROOT/'models/valorant-center400-yolo11s-9460cdaf8b55/best.pt'
+        expected_weight_sha='ba79522e47a2530ac9cfb8159aca8d79397d434a1fc6391e962856d64aeb65ee'
     assert sha256(source)==expected_weight_sha
     shutil.copy2(source,PACKAGE/'weights/center400_warmstart.pt')
     info=dict(source_repo='edgeai-lab/valorant-center400-yolo11s',
@@ -64,6 +68,9 @@ def package():
     if anatomy:
         info['source_revision']='9c592fe4d0222ee460ffb3cea82f376d99a46d0d'
         info['purpose']='Transfer compatible features from a three-class checkpoint; the two-class predictor is rebuilt. Do not resume the old three-class optimizer.'
+        if negatives:
+            info['source_revision']='9460cdaf8b55cf92695053c55d662127e0e8db7e'
+            info['purpose']='Fine-tune the same two anatomy classes with teammate-only hard negatives; restart optimizer.'
         (PACKAGE/'weights/warmstart_info.json').write_text(json.dumps(info,indent=2))
     tool_names=['train_enemy_anatomy.py','dataset_io.py','prepare_center_training.py'] if anatomy else [
         'train_h100.py','train_synthetic_yolo.py','prepare_center_training.py',
@@ -71,6 +78,8 @@ def package():
     for name in tool_names:
         shutil.copy2(ROOT/'tools'/name,PACKAGE/'tools'/name)
     shutil.copy2(ROOT/'requirements.txt',PACKAGE/'requirements.txt')
+    if (DATA/'baseline_teammate_test.json').exists():
+        shutil.copy2(DATA/'baseline_teammate_test.json',PACKAGE/'baseline_teammate_test.json')
     for name in ['preview_scenes.jpg','preview_heads.jpg']:shutil.copy2(DATA/name,PACKAGE/name)
     if (DATA/'preview_new_scenes.jpg').exists():shutil.copy2(DATA/'preview_new_scenes.jpg',PACKAGE/'preview_new_scenes.jpg')
     if (DATA/'scene_catalog').exists():

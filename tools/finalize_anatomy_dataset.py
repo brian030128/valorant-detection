@@ -13,8 +13,9 @@ COLORS=['#ef72ff','#ffe04b']
 
 def process(path):
     path=Path(path);root=path.parents[2];split=path.parent.name
-    meta=json.loads(path.read_text());assert meta['label_policy']=='enemy-anatomy-v1'
-    assert all(a['role']=='enemy' for a in meta['actors'])
+    meta=json.loads(path.read_text());assert meta['label_policy'] in ['enemy-anatomy-v1','enemy-anatomy-teammate-negatives-v2']
+    assert all(a['role'] in ['enemy','teammate'] for a in meta['actors'])
+    if meta['label_policy']=='enemy-anatomy-v1':assert all(a['role']=='enemy' for a in meta['actors'])
     source=root/'images'/split/(path.stem+'.jpg')
     with Image.open(source) as im:assert im.size==(400,400);im.verify()
     with Image.open(root/'masks'/split/(path.stem+'.png')) as im:pixels=np.array(im.convert('RGB'))
@@ -27,6 +28,7 @@ def process(path):
     assert not np.any((ids==0)&np.any(pixels[:,:,1:]>0,axis=2))
     objects=[];rows=[]
     for actor in meta['actors']:
+        if actor['role']=='teammate':continue
         for cls,channel in ((0,2),(1,1)):
             ys,xs=np.where((ids==actor['instance_id'])&(pixels[:,:,channel]>127))
             if not len(xs):continue
@@ -35,7 +37,8 @@ def process(path):
                                 character=actor['character'],bbox_xyxy=[x0,y0,x1,y1],visible_pixels=len(xs)))
             rows.append(f'{cls} {(x0+x1)/800:.8f} {(y0+y1)/800:.8f} {(x1-x0)/400:.8f} {(y1-y0)/400:.8f}\n')
     dest=root/'labels'/split/(path.stem+'.txt');dest.parent.mkdir(parents=True,exist_ok=True);dest.write_text(''.join(rows))
-    return dict(index=meta['index'],split=split,scene_group=meta['scene_group'],scene_family=meta['scene_family'],objects=objects),hashlib.sha256(source.read_bytes()).hexdigest()
+    return dict(index=meta['index'],split=split,scene_group=meta['scene_group'],scene_family=meta['scene_family'],objects=objects,
+                actor_roles=[a['role'] for a in meta['actors']],label_policy=meta['label_policy']),hashlib.sha256(source.read_bytes()).hexdigest()
 
 def panel(root,annotation):
     im=Image.open(root/'images'/annotation['split']/f"{annotation['index']}.jpg").convert('RGB')
@@ -58,13 +61,17 @@ def main():
     counts=defaultdict(Counter);groups=defaultdict(set)
     for a in annotations:
         counts[a['split']]['images']+=1;counts[a['split']]['empty_images']+=int(not a['objects'])
+        counts[a['split']]['teammate_images']+=int('teammate' in a['actor_roles'])
+        counts[a['split']]['background_images']+=int(not a['actor_roles'])
+        if a['actor_roles'] and set(a['actor_roles'])=={'teammate'}:assert not a['objects']
         counts[a['split']].update(o['class'] for o in a['objects']);groups[a['split']].add(a['scene_group'])
     for s,g in groups.items():
         for t,h in groups.items():
             if s!=t:assert not g&h,'Cross-split viewpoint overlap'
     (root/'annotations.jsonl').write_text(''.join(json.dumps(a)+'\n' for a in annotations))
     (root/'data.yaml').write_text(f'path: {root.as_posix()}\ntrain: images/train\nval: images/val\ntest: images/test\nnames:\n  0: enemy_body\n  1: enemy_head\n')
-    audit=dict(images=len(paths),resolution=[400,400],class_names=NAMES,label_policy='enemy-anatomy-v1',splits=dict(counts),duplicate_images=0,cross_split_scene_overlap=0,
+    policies={a['label_policy'] for a in annotations};assert len(policies)==1
+    audit=dict(images=len(paths),resolution=[400,400],class_names=NAMES,label_policy=next(iter(policies)),splits=dict(counts),duplicate_images=0,cross_split_scene_overlap=0,
                label_definition='Visible torso (pelvis/spine skin influence within central trunk envelope), and head excluding identified hair materials/bones. Arms, legs and excluded surfaces still occlude targets. Visual anatomical approximation, not game collision hitboxes.')
     (root/'audit.json').write_text(json.dumps(audit,indent=2))
     selected=[a for a in annotations if a['objects']][:24]
