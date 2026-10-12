@@ -86,7 +86,7 @@ def main():
     audit=dict(images=len(paths),resolution=[400,400],class_names=NAMES,label_policy=next(iter(policies)),splits=dict(counts),duplicate_images=0,cross_split_scene_overlap=0,
                label_definition='Visible torso (pelvis/spine skin influence within central trunk envelope), and head excluding identified hair materials/bones. Arms, legs and excluded surfaces still occlude targets. Visual anatomical approximation, not game collision hitboxes.')
     (root/'audit.json').write_text(json.dumps(audit,indent=2))
-    selected=[a for a in annotations if a['objects']][:24]
+    selected=[a for a in annotations if a['objects']][:24] or annotations[:24]
     canvas=Image.new('RGB',(1600,400*((len(selected)+3)//4)))
     for i,a in enumerate(selected):canvas.paste(panel(root,a),((i%4)*400,(i//4)*400))
     canvas.save(root/'preview_scenes.jpg');canvas.save(root/'preview_heads.jpg')
