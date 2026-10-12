@@ -17,7 +17,7 @@ def test_script_error_rejects_success_exit_and_completion_marker(tmp_path, monke
         generator.run(['godot'],tmp_path/'render.log','REAL_MAP_COMPLETE')
 
 
-@pytest.mark.parametrize('workers',[2,3])
+@pytest.mark.parametrize('workers',[2,3,4,5,6])
 @pytest.mark.parametrize('start,split',[(0,'train'),(5000,'test')])
 def test_workers_overlap_without_sharing_frame_ids(tmp_path, monkeypatch, workers, start, split):
     (tmp_path/'tools').mkdir()
@@ -25,7 +25,7 @@ def test_workers_overlap_without_sharing_frame_ids(tmp_path, monkeypatch, worker
     (tmp_path/'environment').mkdir()
     (tmp_path/'environment/real_maps_dataset.gd').write_text('renderer')
     source=tmp_path/'assets/source/valorant_maps';source.mkdir(parents=True)
-    records=[dict(name=name,file=name+'.blend',sha256=name,planned_training_images=2) for name in ['A','B','C'][:workers]]
+    records=[dict(name=name,file=name+'.blend',sha256=name,planned_training_images=2) for name in ['A','B','C','D','E','F'][:workers]]
     (source/'manifest.json').write_text(json.dumps({'maps':records}))
     for record in records:
         folder=tmp_path/'assets/generated/valorant_maps'/record['name'].lower();folder.mkdir(parents=True)

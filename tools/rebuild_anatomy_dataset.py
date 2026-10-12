@@ -1,4 +1,4 @@
-"""Render all 32k images with two-class anatomy labels, audit, then publish privately."""
+"""Render anatomy images with two-class anatomy labels, audit, then publish privately."""
 import argparse
 from collections import Counter,defaultdict
 import json
@@ -12,26 +12,35 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--publish',action='store_true');p.add_argument('--assemble-only',action='store_true')
-    p.add_argument('--teammate-negatives',action='store_true');args=p.parse_args()
+    p.add_argument('--teammate-negatives',action='store_true')
+    p.add_argument('--extra-train',type=int,default=0)
+    p.add_argument('--workers',type=int,choices=range(1,7),default=3)
+    args=p.parse_args()
+    assert 0<=args.extra_train<=20000
+    target=32000+args.extra_train
     version='v7' if args.teammate_negatives else 'v6'
     policy='enemy-anatomy-teammate-negatives-v2' if args.teammate_negatives else 'enemy-anatomy-v1'
     output=ROOT/f'datasets/valorant_detection_400_{version}';output.mkdir(parents=True,exist_ok=True)
     status=output/'generation_status.json'
     def state(phase,**extra):
-        status.write_text(json.dumps(dict(phase=phase,target=32000,updated_at=time.time(),**extra),indent=2))
+        status.write_text(json.dumps(dict(phase=phase,target=target,updated_at=time.time(),**extra),indent=2))
     def run(script,*arguments):
         subprocess.run([sys.executable,'-u',str(ROOT/'tools'/script),*map(str,arguments)],cwd=ROOT,check=True)
     try:
-        for split,count,start in [('val',1000,6000),('test',1000,7000),('train',30000,0)]:
+        jobs=[('val',1000,6000),('test',1000,7000),('train',30000,0)]
+        if args.extra_train:jobs.append(('train',args.extra_train,4000))
+        for split,count,start in jobs:
             renders=ROOT/(f'datasets/valorant_anatomy_v7_{split}' if args.teammate_negatives else f'datasets/valorant_anatomy_{split}')
+            if start==4000:renders=renders.with_name(renders.name+'_extra')
             state('rendering',split=split,active_dataset=str(renders))
             if not args.assemble_only:
                 run('generate_real_maps.py','--anatomy','--split',split,'--start',start,'--total-images',count,
-                    '--workers',3,'--output',renders,*(['--teammate-negatives'] if args.teammate_negatives else []))
+                    '--workers',args.workers,'--batch-size',2000,'--output',renders,*(['--teammate-negatives'] if args.teammate_negatives else []),
+                    *(['--expanded-views'] if start==4000 else []))
             for kind in ['images','masks','metadata']:
                 shutil.copytree(renders/kind/split,output/kind/split,dirs_exist_ok=True)
         state('auditing')
-        run('finalize_anatomy_dataset.py',output,'--expected',32000)
+        run('finalize_anatomy_dataset.py',output,'--expected',target)
         metas=[json.loads(path.read_text()) for path in output.glob('metadata/*/*.json')]
         regions=defaultdict(set)
         for m in metas:regions[m['split']].add((m['scene_family'],m['spatial_region']))
@@ -48,7 +57,7 @@ def main():
         assert len({m['crosshair']['style'] for m in metas})==6
         provenance=dict(parent_hf_revision='9496be356911c9b0e21be062038490674f9d5722' if args.teammate_negatives else '6563471bb7a35b6ec553f76597e61730118dca05',all_images_regenerated=True,
                         source_maps=json.loads((ROOT/'assets/source/valorant_maps/manifest.json').read_text()),
-                        label_policy=policy,map_counts=dict(Counter(m['scene_family'] for m in metas)),
+                        label_policy=policy,extra_training_images=args.extra_train,render_workers=args.workers,map_counts=dict(Counter(m['scene_family'] for m in metas)),
                         region_counts={s:len(r) for s,r in regions.items()},cross_split_camera_region_overlap=0,
                         limitations='All splits share the same map assets. Camera regions are disjoint; target positions may overlap. Skin/material-based anatomy masks are approximations, not verified game hitboxes.')
         (output/'provenance.json').write_text(json.dumps(provenance,indent=2))
@@ -72,16 +81,18 @@ The script pads images to 416 without rescaling, transfers compatible pretrained
             shutil.copytree(ROOT/'datasets/anatomy_review_v1/character_review',output/'scene_catalog',dirs_exist_ok=True)
         if args.teammate_negatives:
             card=(output/'README.txt').read_text(encoding='utf-8')
+            card=card.replace('32,000 newly rendered',f'{target:,} newly rendered').replace('30,000 train',f'{30000+args.extra_train:,} train')
+            if args.extra_train:card+='\nAdditional training images use a separately seeded 1.75-meter ground scan and up to 24 ray-checked target directions per camera. Only training camera regions are used; validation and test are unchanged.\n'
             card=card.replace('(v6)','(v7)').replace('No teammates appear in the scenes; empty backgrounds are included.',
                 'Approximately 60% enemy scenes, 25% teammate-only scenes and 15% empty backgrounds. All 29 characters occur on both teams. Teammates have EMPTY labels (no body/head targets), using no highlight or a varied cyan rim. These are synthetic appearance variants, not exact game teammate shaders.')
             card=card.replace('transfers compatible pretrained features and rebuilds the two-class predictor',
                 'fine-tunes the existing two-class anatomy checkpoint with teammate negatives')
             (output/'README.txt').write_text(card,encoding='utf-8')
             run('build_teammate_review.py',output)
-        state('complete',images=32000)
+        state('complete',images=target)
         if args.publish:
             run('publish_center_dataset.py','--dataset',output,'--package',ROOT/f'exports/hf_detection400_{version}')
-            state('published',images=32000)
+            state('published',images=target)
         print('ANATOMY_REBUILD_COMPLETE',flush=True)
     except BaseException as error:
         state('failed',error=str(error));raise

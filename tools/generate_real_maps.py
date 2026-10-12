@@ -29,6 +29,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--anatomy',action='store_true')
     parser.add_argument('--teammate-negatives',action='store_true')
+    parser.add_argument('--expanded-views',action='store_true')
     parser.add_argument('--total-images',type=int,help='Distribute exactly this many images across selected maps.')
     parser.add_argument('--blender', type=Path, default=Path('C:/Program Files/Blender Foundation/Blender 5.2/blender.exe'))
     parser.add_argument('--output', type=Path, default=ROOT/'datasets/valorant_real_maps_30000')
@@ -37,7 +38,7 @@ def main():
     parser.add_argument('--pilot', type=int, default=0, help='Render this many per map instead of the full quotas')
     parser.add_argument('--maps', nargs='*')
     parser.add_argument('--batch-size', type=int, default=500)
-    parser.add_argument('--workers', type=int, choices=[1,2,3], default=2)
+    parser.add_argument('--workers', type=int, choices=[1,2,3,4,5,6], default=2)
     parser.add_argument('--rerender-map', nargs='*', default=[])
     args = parser.parse_args()
     if args.teammate_negatives and not args.anatomy:parser.error('--teammate-negatives requires --anatomy')
@@ -85,6 +86,25 @@ def main():
             report = json.loads((folder/'conversion.json').read_text())
             assert report['source_sha256'] == record['sha256']
             assert report['viewpoints'] > 100
+        if args.expanded_views:
+            expander=ROOT/'tools/expand_map_viewpoints.py'
+            expansion_version=digest(expander)
+            def expand_record(item):
+                number,record=item
+                name=record['name'].lower();folder=ROOT/'assets/generated/valorant_maps'/name
+                cache=folder/'viewpoints_expanded_version.txt'
+                if not cache.exists() or cache.read_text()!=expansion_version or not (folder/'viewpoints_expanded.json').exists():
+                    with state_lock:
+                        state.update(phase='expanding_viewpoints',current_map=name);save()
+                    run([str(args.blender),'--background','--factory-startup','--disable-autoexec','--threads','4',
+                         '--python',str(expander),'--',str(ROOT/'assets/source/valorant_maps'/record['file']),str(folder)],
+                        logs/f'expand_{name}.log','VIEWPOINT_EXPANSION_COMPLETE')
+                    cache.write_text(expansion_version)
+            # BVH preparation is CPU/RAM intensive; no Godot renderers run during this phase.
+            with ThreadPoolExecutor(max_workers=min(2,args.workers)) as pool:
+                futures=[pool.submit(expand_record,item) for item in records]
+                for future in as_completed(futures):future.result()
+            state['viewpoint_expander_sha256']=expansion_version
         state.update(phase='rendering');save()
         def render_record(item):
             number,record=item
@@ -95,6 +115,7 @@ def main():
                        'real_maps_dataset.tscn', '--', f'--map={name}', f'--map-number={number}',
                        f'--output={output.as_posix()}',f'--split={args.split}']
             if args.anatomy:command.append('--anatomy')
+            if args.expanded_views:command.append('--expanded-views')
             if args.teammate_negatives:command.append('--teammate-negatives')
             for start in range(args.start, args.start+count, args.batch_size):
                 size = min(args.batch_size, args.start+count-start)

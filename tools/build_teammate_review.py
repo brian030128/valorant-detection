@@ -19,7 +19,7 @@ def main():
         previous=groups[actor['character']].get(kind)
         if previous is None or score<previous[0]:groups[actor['character']][kind]=(score,m)
     audit=json.loads((root/'audit.json').read_text())
-    if audit['images']==32000:
+    if audit['images']>=32000:
         assert len(groups)==29 and all(set(g)=={'enemy','none','cyan'} for g in groups.values())
     out=root/'scene_catalog';out.mkdir(exist_ok=True)
     page='<!doctype html><meta charset="utf-8"><title>Enemy / teammate training review</title><style>body{background:#202025;color:white;font:18px sans-serif;margin:24px}img{max-width:100%}</style><h1>Two-class labels with teammate negatives</h1><p>Left: enemy with torso/head labels. Middle: teammate without highlight, empty labels. Right: cyan-highlighted teammate, empty labels. Same anatomy definitions as the approved v6 dataset. Pose and background differ across columns; these are examples, not paired experiments.</p>'
@@ -35,7 +35,7 @@ def main():
         page+=f'<h2>{name.title()}</h2><img loading="lazy" src="teams_{name}.jpg">'
     (out/'index.html').write_text(page,encoding='utf-8');print(out/'index.html')
     baseline=Path(__file__).resolve().parents[1]/'runs/analysis/teammate_v7_baseline_9460cdaf8b55/results.json'
-    if audit['images']==32000 and baseline.exists():
+    if audit['images']>=32000 and baseline.exists():
         shutil.copy2(baseline,root/'baseline_teammate_test.json')
         result=json.loads(baseline.read_text());negative=result['negative_groups']['teammate']
         with (root/'README.txt').open('a',encoding='utf-8') as stream:

@@ -48,6 +48,14 @@ def snapshot(root, total, log):
     labels = {split: count_files(root/'labels'/split, '.txt') for split in SPLITS}
     audit = read_json(root/'audit.json')
     job = read_json(root/'generation_status.json') or {}
+    if job.get('active_dataset') and job.get('phase')=='rendering':
+        active=Path(job['active_dataset'])
+        # Assembly copies completed stages; count IDs once across staging/output.
+        for split in SPLITS:
+            for kind,suffix,counts in [('metadata','.json',rendered),('labels','.txt',labels)]:
+                counts[split]=len({p.name for source in [root,active] for p in (source/kind/split).glob('*'+suffix)})
+        child=read_json(active/'generation_status.json') or {}
+        job={**job,**child,'target':total}
     if job.get('current_log'):
         log = Path(job['current_log'])
     elif job:
