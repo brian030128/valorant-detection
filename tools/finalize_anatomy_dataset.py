@@ -49,7 +49,7 @@ def panel(root,annotation):
     return im
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('root',type=Path);p.add_argument('--expected',type=int);p.add_argument('--workers',type=int,default=4)
+    p=argparse.ArgumentParser();p.add_argument('root',type=Path);p.add_argument('--expected',type=int);p.add_argument('--workers',type=int,default=8)
     args=p.parse_args();root=args.root.resolve();paths=sorted(root.glob('metadata/*/*.json'))
     if args.expected:assert len(paths)==args.expected,(len(paths),args.expected)
     with ProcessPoolExecutor(args.workers) as pool:results=list(pool.map(process,paths,chunksize=20))

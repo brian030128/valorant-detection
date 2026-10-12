@@ -153,7 +153,7 @@ def main():
             for future in as_completed(futures):future.result()
         state.update(phase='auditing',current_log=str(logs/'audit.log')); save()
         finalizer='finalize_anatomy_dataset.py' if args.anatomy else 'finalize_synthetic_dataset.py'
-        run([sys.executable, '-u', str(ROOT/'tools'/finalizer), str(output), '--expected', str(total), '--workers', '4'],
+        run([sys.executable, '-u', str(ROOT/'tools'/finalizer), str(output), '--expected', str(total), '--workers', '8'],
             logs/'audit.log', '"duplicate_images": 0')
         metadata = [json.loads(p.read_text()) for p in (output/'metadata'/args.split).glob('*.json')]
         diversity = {}
