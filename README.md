@@ -1,5 +1,184 @@
 # Valorant detection experiments
 
+## Smooth head trajectories
+
+The green **AIM 200x200** square shows the targeting region in both preview
+panels. Detection still uses the native 400x400 crop. Only an `enemy_head`
+whose bounding-box center lies in the smaller square is eligible; the nearest
+head to the capture center wins. A two-pixel dead zone prevents tiny corrections.
+
+```powershell
+git submodule update --init --recursive
+python tools/live_capture_detection.py --aim
+python tools/live_capture_detection.py --aim --mouse --mouse-port COM6 --aim-scale 1
+```
+
+`--aim` alone previews generated movement without opening the serial port or
+capturing the local cursor. With `--mouse`, it sends movement over streaming v3
+firmware. Your movement forwards normally until an eligible head starts a
+trajectory immediately from a single fresh detection, without a confirmation
+delay. During that trajectory only movement is replaced; left/right button
+presses, holds and releases continue forwarding. Manual movement resumes when
+the trajectory completes. Detection changes do not interrupt or redirect an
+active movement. Overridden manual motion
+is discarded, never replayed afterward. `--mouse-scale` controls manual movement;
+`--aim-scale` controls generated movement. With `--mouse-dry-run`, the local
+cursor is still captured and recentered, but output is printed without serial
+access. Generated paths never create button presses themselves.
+
+Each trajectory randomly selects a **50–100 ms** movement duration
+in one-millisecond increments. Use `--aim-min-ms` and `--aim-max-ms` to narrow
+that range. The selected duration
+and actual playback time are recorded in `runs/live_capture/status.json`, along
+with the latest time/x/y trajectory. The orange line displays its shape.
+
+Generated paths use the same `--mouse-hz` setting as manual cursor sampling:
+250 Hz by default (one point every 4 ms). Paths have 13–25 movement intervals
+plus their starting point, with a shorter final interval when needed to hit
+the exact endpoint.
+Previously, generated paths used 125 Hz. Fractional positions are retained
+until cumulative HID-count rounding. Higher requested rates also increase path
+density, but actual delivery is limited by serial/HID acknowledgements and
+Windows scheduling; overdue points are coalesced, as with manual forwarding.
+
+The default `--aim-generator smooth` uses a mathematical quintic easing function,
+with no trajectory model loading or inference. It moves from the capture center
+to the detected head center with zero continuous velocity and acceleration at
+each endpoint. Each path gets a random sideways bend bounded by 3 pixels or
+5% of the target distance, whichever is smaller. Forward progress is monotonic,
+and the endpoint is exact before HID rounding. Timelines are cached at startup.
+YOLO still performs head detection; only trajectory generation is model-free.
+
+For comparison, `--aim-generator ai` restores the previous cached GRU-derived
+curves; run `git -C mouse-generator lfs pull` first if its weights are missing.
+That mode supports `--aim-checkpoint`. Both modes use the same movement duration,
+sampling rate, target selection, mouse scaling, button forwarding and feedback
+wait, so changing the generator isolates its contribution to latency.
+The selected generator is recorded in `status.json`.
+
+`--aim-scale` is HID counts per native capture pixel and must match receiving
+game sensitivity. Exact pixel endpoints in the planned path do not guarantee
+physical aim without that calibration. The 50–100 ms duration is the requested
+movement duration; capture/inference latency and serial acknowledgement delays
+are additional. Playback coalesces late samples without losing total movement.
+Paths aim at the head position observed when they begin; moving targets require
+subsequent fresh corrections. After the final HID report is acknowledged, the
+next automatic correction waits `--aim-settle-ms` (default 20 ms) and requires a
+frame received after that interval. Manual movement and button transitions
+continue forwarding during the wait. No movements queue; frames received
+during a trajectory or its settling interval cannot start the next one.
+Detections older than 150 ms cannot start movement.
+The 20 ms default favors quicker follow-up corrections and is not measured
+capture latency. The first movement has no settling wait. Reducing this delay
+can reintroduce corrections based on stale visual feedback.
+Frame timestamps indicate receipt, not sensor exposure. Calibrate the interval
+against movement-to-visible-response delay; this time gate cannot prove that
+a frame reflects the previous movement if the actual delay is longer.
+For example, append `--aim-settle-ms 150` to increase the wait, or use 0 to
+disable the extra wait while still requiring a frame after acknowledgement.
+`status.json` includes `feedback_timing`: configured wait, completion/frame
+cutoff timestamps (monotonic), source-frame age at planning, and elapsed time
+from the previous completion to the next start. These are software timings,
+not a measurement of capture-card latency.
+Once started, movement finishes even if the target disappears. Q/Escape,
+closing the preview, or Ctrl+C still immediately stops the
+session and closes the relay with STOP.
+
+## Live mouse relay (Windows)
+
+`tools/relay_mouse.py` samples the local cursor, recenters it on the primary
+display, and forwards relative movement using the `mouse-spoofing` submodule's
+`replay.Relay` utility and CRC-framed UART protocol. Connect this PC to the
+board's UART bridge and the receiving PC to its native USB HID port. Follow the
+[firmware and wiring guide](mouse-spoofing/firmware/README.md).
+
+```powershell
+git submodule update --init --recursive
+python -m pip install "pyserial>=3.5,<4"
+python mouse-spoofing/replay.py --list-ports
+python tools/relay_mouse.py --port COM6 --probe
+python tools/relay_mouse.py --dry-run
+python tools/relay_mouse.py --port COM6 --counts-per-pixel 1
+```
+
+To combine HDMI screen capture, detection labels, and mouse forwarding:
+
+```powershell
+python tools/live_capture_detection.py --mouse
+python tools/live_capture_detection.py --mouse --mouse-port COM6 --mouse-scale 1 --mouse-hz 250
+python tools/live_capture_detection.py --mouse --mouse-dry-run
+```
+
+`--mouse` defaults to COM6 and runs cursor capture independently of inference.
+The preview remains responsive while waiting for the receiving USB connection;
+its mouse status changes to `drag` when streaming starts. The local cursor is
+captured only after USB is ready. Active serial/HID errors stop the session;
+movement is never replayed automatically after a failure.
+Without it, the preview runs normally without mouse capture or serial access.
+Q or Escape globally while `--mouse` is active, closing the preview, or reaching `--frames`
+stops both features and restores the local cursor. Relay failures stop the
+preview and report the error. `--mouse-dry-run` requires `--mouse` and allows
+combined testing without a connected board. The same firmware/USB readiness
+requirements below apply to live forwarding.
+
+Q, Escape or Ctrl+C stops capture and restores the original local cursor position.
+With streaming v3 firmware, left/right button states are forwarded directly:
+press and hold a button, move to drag, then release. Button transitions are
+preserved in order while movement within each state is coalesced. There is no
+batch start delay. Idle heartbeats maintain holds; STOP or the firmware's
+250 ms communication watchdog releases buttons. Q/Escape closes and releases.
+The M2K-profile firmware source and backup/restore instructions are in
+[`mouse-spoofing/firmware/m2k_stream`](mouse-spoofing/firmware/m2k_stream/README.md).
+
+On legacy v1/v2 firmware, left/right clicks use 30 ms press/release pairs (button masks
+1 and 2). Observed down edges are queued while serial is busy; holding a button
+does not repeat clicks. The batch firmware requires buttons released at the end
+of every batch, so sustained holds/dragging are unavailable in legacy mode.
+Wheel is not forwarded in either mode. Input
+is polled: a press and release entirely between samples can be missed. Local
+clicks are not suppressed. Exit discards queued clicks and sends STOP to release
+remote buttons. Dry-run also captures/recenters the cursor, but only prints
+movement and actual held-button masks. Probe sends STOP and queries firmware without
+moving the mouse. Live capture supports the v1, v2 and v3 UART profiles and requires
+`USB=1`. Probe also works with `USB=0`, which is expected when native USB is
+disconnected. Unknown profiles fail before cursor capture starts. The wrapper
+uses the pinned submodule's `Relay` framing and request utilities for both
+versions; its original standalone `replay.py` still expects v1.
+
+The connected CH343 bridge on COM6 originally reported protocol v2 and a
+Zaunkoenig M2K identity. The streaming build preserves its recovered USB
+descriptors and reported identity. The wrapper uses conservative 127-count reports for v2, retaining
+remaining displacement for subsequent reports, and observes its advertised
+10 ms minimum cadence. v1 uses up to 32767 counts per report. The v2 command
+format was checked against local v2 source and verified on the connected board
+with signed movement preloads followed by STOP (no playback). A zero-motion
+LOAD/E/RUN/DONE transaction was also verified with `USB=1`. On 2026-10-12,
+streaming v3 was built and flashed to app0 after saving a full 16 MiB backup.
+The compiled device/configuration/report descriptors match the original
+image byte-for-byte, and the post-flash identity reply is unchanged. The board
+confirmed v3 and streaming capabilities, with `USB=0` while native USB was
+disconnected. After native USB was connected, the board reported `USB=1` and
+completed 30 zero-motion streaming reports. Median serial-to-HID-completion
+round trip was 4.00 ms (maximum 4.14 ms), versus 27.01 ms for 10 zero-motion
+batch reports in the same firmware. This excludes capture-card/display delay
+and does not itself verify a visible drag gesture.
+
+Movement is sampled at up to 250 Hz by default; actual timing depends on Windows
+scheduling. Capture temporarily requests 1 ms Windows timer resolution: a
+measured 4 ms wait dropped from about 15.5 ms to 4.4 ms. The setting is restored
+on exit. UART transmission runs separately. Legacy mode coalesces pending movement
+into one-report batches, retaining any excess over the report limit. Firmware
+adds a start delay per batch (10 ms in the pinned v1 source, 20 ms in the local
+v2 source), plus serial round trips. Legacy commands are written together with
+all acknowledgements still checked. Streaming v3 instead sends one immediate
+report with acknowledgement and supports the full 16-bit axis range.
+This is a basic desktop relay, not raw mouse
+capture: local acceleration applies, fast motion can hit screen edges, and
+movement between reading and recentering can be lost. Receiving-PC pointer
+settings also affect displacement. Fractional scaling is retained across
+batches; excessive backlog or serial errors stop the relay without retrying
+possibly delivered movement. Exit discards unsent movement and sends STOP.
+
 Synthetic native 400x400 crops. Version 6 uses enemy torso and enemy head labels;
 older versions use enemy, teammate and head labels. Code only:
 images, character assets, masks, checkpoints and generated results are excluded

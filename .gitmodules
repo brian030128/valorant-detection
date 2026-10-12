@@ -1,0 +1,6 @@
+[submodule "mouse-spoofing"]
+	path = mouse-spoofing
+	url = git@github.com:brian030128/mouse-spoofing.git
+[submodule "mouse-generator"]
+	path = mouse-generator
+	url = git@github.com:brian030128/mouse-generator.git

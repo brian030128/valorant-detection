@@ -4,6 +4,9 @@
 !/.gitattributes
 !/README.md
 !/requirements.txt
+!/.gitmodules
+!/mouse-spoofing/
+!/mouse-generator
 !/tools/
 !/environment/
 !/tests/
