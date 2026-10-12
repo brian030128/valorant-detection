@@ -30,6 +30,7 @@ def main():
     parser.add_argument('--anatomy',action='store_true')
     parser.add_argument('--teammate-negatives',action='store_true')
     parser.add_argument('--expanded-views',action='store_true')
+    parser.add_argument('--composition',choices=['teammate-only','mixed'])
     parser.add_argument('--total-images',type=int,help='Distribute exactly this many images across selected maps.')
     parser.add_argument('--blender', type=Path, default=Path('C:/Program Files/Blender Foundation/Blender 5.2/blender.exe'))
     parser.add_argument('--output', type=Path, default=ROOT/'datasets/valorant_real_maps_30000')
@@ -41,6 +42,7 @@ def main():
     parser.add_argument('--workers', type=int, choices=[1,2,3,4,5,6], default=2)
     parser.add_argument('--rerender-map', nargs='*', default=[])
     args = parser.parse_args()
+    if args.composition and not (args.anatomy and args.teammate_negatives):parser.error('--composition requires --anatomy and --teammate-negatives')
     if args.teammate_negatives and not args.anatomy:parser.error('--teammate-negatives requires --anatomy')
     assert args.batch_size > 0 and args.start >= 0
     output = args.output.resolve(); output.mkdir(parents=True, exist_ok=True)
@@ -116,6 +118,7 @@ def main():
                        f'--output={output.as_posix()}',f'--split={args.split}']
             if args.anatomy:command.append('--anatomy')
             if args.expanded_views:command.append('--expanded-views')
+            if args.composition:command.append('--composition='+args.composition)
             if args.teammate_negatives:command.append('--teammate-negatives')
             for start in range(args.start, args.start+count, args.batch_size):
                 size = min(args.batch_size, args.start+count-start)

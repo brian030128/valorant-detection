@@ -41,3 +41,12 @@ def test_anatomy_labels_use_regions_not_whole_instance():
         path.write_text(json.dumps(meta));Image.fromarray(pixels).save(root/'masks/test/0.png')
         a,_=process(path)
         assert [(o['class'],o['instance_id']) for o in a['objects']]==[('enemy_body',2)]
+
+        # A nearer teammate covers half the enemy torso and the entire enemy head.
+        pixels[250:320,250:270,0]=32
+        pixels[220:240,260:280,0]=32
+        pixels[220:240,260:280,1]=255
+        Image.fromarray(pixels).save(root/'masks/test/0.png')
+        a,_=process(path)
+        assert [(o['class'],o['instance_id'],o['bbox_xyxy']) for o in a['objects']]==[
+            ('enemy_body',2,[270,250,290,320])]

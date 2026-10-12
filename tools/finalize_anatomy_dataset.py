@@ -36,6 +36,16 @@ def process(path):
             objects.append(dict(class_id=cls,**{'class':NAMES[cls]},instance_id=actor['instance_id'],
                                 character=actor['character'],bbox_xyxy=[x0,y0,x1,y1],visible_pixels=len(xs)))
             rows.append(f'{cls} {(x0+x1)/800:.8f} {(y0+y1)/800:.8f} {(x1-x0)/400:.8f} {(y1-y0)/400:.8f}\n')
+    composition=meta.get('scene_composition')
+    if composition:
+        roles=sorted(a['role'] for a in meta['actors'])
+        assert roles==(['enemy','teammate'] if composition=='mixed' else ['teammate'])
+        assert all(np.count_nonzero(ids==a['instance_id'])>=80 for a in meta['actors'])
+        if composition=='mixed':
+            assert sum(o['visible_pixels'] for o in objects)>=8
+            positions=[np.array(a['position']) for a in meta['actors']]
+            assert np.linalg.norm(positions[0]-positions[1])>=2.799
+        else:assert not objects
     dest=root/'labels'/split/(path.stem+'.txt');dest.parent.mkdir(parents=True,exist_ok=True);dest.write_text(''.join(rows))
     return dict(index=meta['index'],split=split,scene_group=meta['scene_group'],scene_family=meta['scene_family'],objects=objects,
                 actor_roles=[a['role'] for a in meta['actors']],label_policy=meta['label_policy']),hashlib.sha256(source.read_bytes()).hexdigest()
@@ -62,6 +72,8 @@ def main():
     for a in annotations:
         counts[a['split']]['images']+=1;counts[a['split']]['empty_images']+=int(not a['objects'])
         counts[a['split']]['teammate_images']+=int('teammate' in a['actor_roles'])
+        counts[a['split']]['teammate_only_images']+=int(set(a['actor_roles'])=={'teammate'})
+        counts[a['split']]['mixed_images']+=int(set(a['actor_roles'])=={'enemy','teammate'})
         counts[a['split']]['background_images']+=int(not a['actor_roles'])
         if a['actor_roles'] and set(a['actor_roles'])=={'teammate'}:assert not a['objects']
         counts[a['split']].update(o['class'] for o in a['objects']);groups[a['split']].add(a['scene_group'])

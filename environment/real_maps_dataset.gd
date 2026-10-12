@@ -5,6 +5,7 @@ var map_name := "ascent"
 var render_split := "train"
 var teammate_negatives := false
 var expanded_views := false
+var scene_composition := ""
 
 func negative_mix_role(local_index: int) -> String:
 	# Shuffle a balanced 20-frame block independently of pose/camera/HUD RNG.
@@ -55,6 +56,7 @@ func setup_map() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg=="--teammate-negatives":teammate_negatives=true
 		if arg=="--expanded-views":expanded_views=true
+		if arg.begins_with("--composition="):scene_composition=arg.trim_prefix("--composition=")
 		if arg.begins_with("--split="):render_split=arg.trim_prefix("--split=")
 		if arg.begins_with("--map="):map_name=arg.trim_prefix("--map=")
 		if arg.begins_with("--map-number="):map_number=int(arg.trim_prefix("--map-number="))
@@ -159,6 +161,7 @@ func place(index: int, local_index: int, attempt: int) -> Array:
 	var role := "teammate" if local_index%5==1 else "enemy"
 	if anatomy_labels:role="enemy"
 	if teammate_negatives:role=negative_mix_role(local_index)
+	if scene_composition!="":role="teammate" if scene_composition=="teammate-only" else "enemy"
 	var ally_strength := 0.99
 	if teammate_negatives:
 		# Include ordinary visible teammates, not only conspicuous cyan silhouettes.
@@ -184,7 +187,66 @@ func place(index: int, local_index: int, attempt: int) -> Array:
 	if (teammate_negatives and role=="background") or (not teammate_negatives and local_index%20 in [0,9,19]):
 		for a in actors:a.visible=false
 		return []
+	if scene_composition=="mixed":return add_teammate(records,view,k,local_index)
 	return records
+
+func add_teammate(records: Array, view: Dictionary, primary: int, local_index: int) -> Array:
+	var choices: Array=[]
+	for target_id in view["targets"]:
+		var point:=vec(map_data["candidates"][int(target_id)]["point"])+Vector3(0,.025,0)
+		if point.distance_to(actors[primary].position)<2.8:continue
+		var chest:=point+Vector3(0,1.2,0)
+		if camera.is_position_behind(chest):continue
+		var screen:=camera.unproject_position(chest)
+		if screen.x<25 or screen.x>375 or screen.y<30 or screen.y>370:continue
+		choices.append(point)
+	if choices.is_empty():return []
+	var k: int=(primary+1+local_index%3)%actors.size()
+	var actor: Node3D=actors[k]
+	actor.visible=true
+	actor.position=choices[rng.randi_range(0,choices.size()-1)]
+	actor.rotation.y=rng.randf_range(-PI,PI)
+	actor.scale=Vector3.ONE*rng.randf_range(.94,1.06)
+	actor.set_meta("role","teammate")
+	var record: Dictionary=actor_records[k].duplicate()
+	var strength:=0.0 if rng.randf()<.5 else rng.randf_range(.35,1.15)
+	record.merge({"role":"teammate","position":[actor.position.x,actor.position.y,actor.position.z],"yaw":actor.rotation.y,"scale":actor.scale.x,"highlight_style":"none" if strength==0 else "cyan","highlight_strength":strength},true)
+	for player: AnimationPlayer in walk(actor,"AnimationPlayer"):
+		var animations: Array=record["allowed_animations"]
+		var animation: String=animations[rng.randi_range(0,animations.size()-1)]
+		var moment:=rng.randf()*player.get_animation(animation).length
+		player.play(animation);player.seek(moment,true);player.advance(0)
+		record["animation"]=animation;record["animation_time"]=moment
+	for skeleton: Skeleton3D in walk(actor,"Skeleton3D"):
+		var head_index:=skeleton.find_bone("Head")
+		if head_index>=0:
+			head_transforms[k]=(skeleton.global_transform*skeleton.get_bone_global_pose(head_index)).affine_inverse()
+			break
+	for item in actor_surfaces:
+		if item["actor"]!=k:continue
+		item["mask"].set_shader_parameter("head_world_to_local",head_transforms[k])
+		var material: Material=item["beauty"]
+		if material is ShaderMaterial:
+			material.set_shader_parameter("rim_color",ALLY)
+			material.set_shader_parameter("rim_strength",strength)
+	records.append(record)
+	return records
+
+func composition_visible(mask: Image, records: Array) -> bool:
+	var pixels:=mask.get_data()
+	var stride: int=pixels.size()/160000
+	var visible: Dictionary={}
+	var anatomy: Dictionary={}
+	for p in range(0,pixels.size(),stride):
+		var instance:=int(round(float(pixels[p])/32.0))
+		if instance==0:continue
+		visible[instance]=int(visible.get(instance,0))+1
+		if pixels[p+1]>127 or pixels[p+2]>127:anatomy[instance]=int(anatomy.get(instance,0))+1
+	for record in records:
+		var instance: int=record["instance_id"]
+		if int(visible.get(instance,0))<80:return false
+		if record["role"]=="enemy" and int(anatomy.get(instance,0))<8:return false
+	return not records.is_empty()
 
 func hud(beauty: Image, mask: Image, local_index: int) -> Dictionary:
 	var styles := ["none","dot","cross","open","outlined","large"]
@@ -241,6 +303,7 @@ func generate() -> void:
 		var accepted:=false
 		for attempt in 150:
 			var records:=place(index,local_index,attempt)
+			if scene_composition!="" and records.is_empty():continue
 			mask_mode(true)
 			await get_tree().process_frame
 			RenderingServer.force_draw(false)
@@ -258,10 +321,14 @@ func generate() -> void:
 			RenderingServer.force_draw(false)
 			var beauty:=beauty_viewport.get_texture().get_image()
 			var crosshair:=hud(beauty,mask_image,local_index)
+			if scene_composition!="" and not composition_visible(mask_image,records):continue
 			assert(beauty.save_jpg(output_dir.path_join("images/"+render_split+"/"+basename+".jpg"),.97)==OK)
 			assert(mask_image.save_png(output_dir.path_join("masks/"+render_split+"/"+basename+".png"))==OK)
 			var meta: Dictionary={"index":index,"split":"train","scene_group":1000000+map_number*10000+active_view,"scene_family":map_name,"map_viewpoint":active_view,"spatial_region":active_region,"actors":records,"resolution":[400,400],"vertical_fov":camera.fov,"camera_position":[camera.position.x,camera.position.y,camera.position.z],"camera_rotation_degrees":[camera.rotation_degrees.x,camera.rotation_degrees.y,camera.rotation_degrees.z],"purple_srgb":"#b04dbe","generator_version":"real-maps-hud-v1","acceptance_attempt":attempt,"crosshair":crosshair,"pre_hud_body_pixels":body,"pre_hud_head_pixels":head,"sun_rotation_degrees":[sun.rotation_degrees.x,sun.rotation_degrees.y,sun.rotation_degrees.z],"sun_energy":sun.light_energy,"ambient_energy":environment_resource.ambient_light_energy,"placement":{"minimum_player_distance_m":2.8,"screen_envelope_gap_pixels":16.0,"policy":"One actor; real map ground and line-of-sight samples"}}
 			meta["split"]=render_split
+			if scene_composition!="":
+				meta["scene_composition"]=scene_composition
+				meta["placement"]["policy"]="Separate ray-checked ground positions; both actors visible after map, actor and HUD occlusion"
 			meta["viewpoint_catalog"]="expanded-ground-scan-1942871" if expanded_views else "original-ground-scan-817293"
 			if anatomy_labels:
 				meta["label_policy"]="enemy-anatomy-v1"
