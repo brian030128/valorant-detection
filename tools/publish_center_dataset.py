@@ -35,7 +35,7 @@ def package():
     audit=json.loads((DATA/'audit.json').read_text())
     anatomy=audit['class_names']==['enemy_body','enemy_head']
     state=json.loads((DATA/'generation_status.json').read_text())
-    assert state['phase']=='complete' and audit['images']==state['images'] and audit['images']>0
+    assert state['phase'] in ['complete','publishing','published'] and audit['images']==state['images'] and audit['images']>0
     (PACKAGE/'archives').mkdir(parents=True,exist_ok=True)
     (PACKAGE/'weights').mkdir(exist_ok=True)
     (PACKAGE/'tools').mkdir(exist_ok=True)

@@ -14,6 +14,7 @@ ROOT=Path(__file__).resolve().parents[1]
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--publish',action='store_true')
+    parser.add_argument('--publish-only',action='store_true')
     parser.add_argument('--workers',type=int,choices=range(1,7),default=4)
     args=parser.parse_args()
     base=ROOT/'datasets/valorant_detection_400_v7'
@@ -25,6 +26,14 @@ def main():
     def run(script,*arguments):
         subprocess.run([sys.executable,'-u',str(ROOT/'tools'/script),*map(str,arguments)],cwd=ROOT,check=True)
     try:
+        if args.publish_only:
+            assert json.loads((output/'audit.json').read_text())['images']==52000
+            assert json.loads((output/'provenance.json').read_text())['added_images']==10000
+            state('publishing',images=52000)
+            run('publish_center_dataset.py','--dataset',output,'--package',ROOT/'exports/hf_detection400_v8')
+            state('published',images=52000)
+            print('MIXED_DATASET_COMPLETE',flush=True)
+            return
         state('assembling_existing')
         for kind in ['images','masks','metadata']:
             shutil.copytree(base/kind,output/kind,dirs_exist_ok=True)
