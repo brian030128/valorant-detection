@@ -1,5 +1,51 @@
 # Valorant detection experiments
 
+## USB report rate and circle test
+
+The updated `mouse-spoofing/firmware/m2k_stream` build primes a HID report after
+each USB transfer completes. The unchanged full-speed endpoint advertises a
+1 ms interval (1000 Hz). A dedicated firmware task supplies the reports without
+waiting for Python or UART round trips. Between movement updates it sends zero
+displacement with the current button state; it never repeats relative motion.
+This changes USB report cadence, not the rate of new capture/detection or manual
+input samples. Those still use `--mouse-hz` (250 by default), and serial delivery
+can still coalesce their movement. `--mouse-hz 1000` alone cannot fix that limit.
+Live v3 sessions now require the `PACE` capability so an old firmware build
+cannot silently run with the previous report cadence. Probe mode still works
+with the older builds.
+
+Build/flash instructions are in
+[`mouse-spoofing/firmware/m2k_stream/README.md`](mouse-spoofing/firmware/m2k_stream/README.md).
+After flashing and connecting native USB to the receiving PC, run on this PC:
+
+```powershell
+python tools/mouse_circle_test.py --port COM6
+```
+
+After a five-second countdown, the board generates three circles with radius
+240 HID counts and 1000 USB samples per turn (nominally one second per turn).
+The receiving cursor starts at the circle's right edge; leave room to its left.
+The default path has a nonzero movement delta at every circle sample, closes
+exactly in HID counts, and creates no clicks. Screen shape depends on receiving
+mouse sensitivity/acceleration. To leave a visible trace, focus a blank Paint
+canvas on the receiving PC and add `--draw`; it holds left while moving and
+releases at completion. Ctrl+C on the sending PC or the board stop switch aborts.
+
+`runs/mouse_circle_test.json` records completed report count, elapsed time,
+average Hz, minimum/maximum interval and gaps >=1.5 ms. These are firmware
+completion-task timestamps, including scheduling jitter; they are not a
+receiver-side USB capture. The test fails if average delivery is outside
+980..1020 Hz. A visible circle alone does not establish the report rate.
+Use `--dry-run` to inspect the command without serial access or mouse movement.
+
+On 2026-10-30 the updated application was flashed to COM6 after backing up its
+previous app0 image. Three device-generated circles completed successfully,
+and the receiving user confirmed visible circles. Across 4115 completed reports,
+firmware timing measured 999.995 Hz, 992..1008 us intervals and no gaps >=1.5 ms.
+The original USB descriptor bytes remain present in the compiled application.
+The circle generator also passed native C++ tests; 84 parent-project Python
+tests and 21 submodule hardware/protocol unit tests passed.
+
 ## Smooth head trajectories
 
 The green **AIM 200x200** square shows the targeting region in both preview
@@ -18,8 +64,8 @@ capturing the local cursor. With `--mouse`, it sends movement over streaming v3
 firmware. Your movement forwards normally until an eligible head starts a
 trajectory immediately from a single fresh detection, without a confirmation
 delay. During that trajectory only movement is replaced; left/right button
-presses, holds and releases continue forwarding. Manual movement resumes when
-the trajectory completes. Detection changes do not interrupt or redirect an
+presses, holds, releases and vertical scrolling continue forwarding. Manual
+movement resumes when the trajectory completes. Detection changes do not interrupt or redirect an
 active movement. Overridden manual motion
 is discarded, never replayed afterward. `--mouse-scale` controls manual movement;
 `--aim-scale` controls generated movement. With `--mouse-dry-run`, the local
@@ -127,6 +173,14 @@ press and hold a button, move to drag, then release. Button transitions are
 preserved in order while movement within each state is coalesced. There is no
 batch start delay. Idle heartbeats maintain holds; STOP or the firmware's
 250 ms communication watchdog releases buttons. Q/Escape closes and releases.
+Vertical wheel input is captured by a dedicated Windows mouse-hook thread and
+forwarded in the existing signed HID wheel field. One Windows detent (120 units)
+becomes one HID wheel count; partial detents accumulate without movement scaling.
+Scroll direction reversals remain ordered, and large deltas are split into
+reports of at most 127 counts without repeating displacement. Scrolling continues
+during generated aim trajectories and feedback waits. The hook is removed on
+exit; local scrolling is not suppressed. Horizontal tilt scrolling is not
+represented by the current USB report descriptor.
 The M2K-profile firmware source and backup/restore instructions are in
 [`mouse-spoofing/firmware/m2k_stream`](mouse-spoofing/firmware/m2k_stream/README.md).
 
@@ -134,11 +188,11 @@ On legacy v1/v2 firmware, left/right clicks use 30 ms press/release pairs (butto
 1 and 2). Observed down edges are queued while serial is busy; holding a button
 does not repeat clicks. The batch firmware requires buttons released at the end
 of every batch, so sustained holds/dragging are unavailable in legacy mode.
-Wheel is not forwarded in either mode. Input
-is polled: a press and release entirely between samples can be missed. Local
+Wheel is not forwarded in legacy mode. Cursor movement and buttons
+are polled: a press and release entirely between samples can be missed. Local
 clicks are not suppressed. Exit discards queued clicks and sends STOP to release
 remote buttons. Dry-run also captures/recenters the cursor, but only prints
-movement and actual held-button masks. Probe sends STOP and queries firmware without
+movement, actual held-button masks and vertical wheel counts. Probe sends STOP and queries firmware without
 moving the mouse. Live capture supports the v1, v2 and v3 UART profiles and requires
 `USB=1`. Probe also works with `USB=0`, which is expected when native USB is
 disconnected. Unknown profiles fail before cursor capture starts. The wrapper

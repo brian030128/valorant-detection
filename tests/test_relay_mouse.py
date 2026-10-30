@@ -7,6 +7,15 @@ from tools import relay_mouse
 from tools.relay_mouse import PendingMotion, check_firmware, load_protocol, send_motion
 
 
+@pytest.fixture(autouse=True)
+def no_global_wheel_hook(monkeypatch):
+    class Wheel:
+        def start(self): pass
+        def take(self): return 0
+        def close(self): pass
+    monkeypatch.setattr(relay_mouse, 'WindowsWheel', Wheel)
+
+
 def test_scaled_movement_preserves_fractional_counts():
     pending = PendingMotion(0.25)
     total = [0, 0]
@@ -192,8 +201,8 @@ def test_drag_preserves_down_movement_and_release():
     inputs.sample(20, -2, 1)
     inputs.sample(0, 0, 0)
     inputs.sample(4, 5, 0)
-    assert inputs.take() == (30, 0, 1)
-    assert inputs.take() == (4, 5, 0)
+    assert inputs.take() == (30, 0, 1, 0)
+    assert inputs.take() == (4, 5, 0, 0)
     assert inputs.take() is None
 
 
@@ -208,9 +217,9 @@ def test_stream_fractional_scaling_and_split_preserve_button_state():
     inputs = relay_mouse.StreamInput(.25)
     for _ in range(100):
         inputs.sample(1, -1, 3)
-    assert inputs.take(10) == (10, -10, 3)
-    assert inputs.take(10) == (10, -10, 3)
-    assert inputs.take(10) == (5, -5, 3)
+    assert inputs.take(10) == (10, -10, 3, 0)
+    assert inputs.take(10) == (10, -10, 3, 0)
+    assert inputs.take(10) == (5, -5, 3, 0)
 
 
 def test_stream_acknowledgements_advance_sequence_without_retries():
@@ -237,23 +246,23 @@ def test_aim_replaces_motion_preserves_clicks_and_resumes_without_backlog():
     inputs = relay_mouse.StreamInput(1)
     router = relay_mouse.MotionRouter(inputs, aim)
     inputs.sample(12, -3, 1)
-    assert router.take() == (12, -3, 1)
+    assert router.take() == (12, -3, 1, 0)
     aim.output = (5, 6)
     inputs.sample(999, 999, 1)
     inputs.sample(999, 999, 0)
     inputs.sample(999, 999, 2)
     inputs.sample(999, 999, 0)
-    assert router.take() == (5, 6, 1)
+    assert router.take() == (5, 6, 1, 0)
     aim.output = (0, 0)
-    assert router.take() == (0, 0, 0)
-    assert router.take() == (0, 0, 2)
-    assert router.take() == (0, 0, 0)
+    assert router.take() == (0, 0, 0, 0)
+    assert router.take() == (0, 0, 2, 0)
+    assert router.take() == (0, 0, 0, 0)
     assert router.take() is None
     inputs.sample(900, 800, 0)
     aim.output = None
-    assert router.take() == (0, 0, 0)
+    assert router.take() == (0, 0, 0, 0)
     inputs.sample(7, -4, 1)
-    assert router.take() == (7, -4, 1)
+    assert router.take() == (7, -4, 1, 0)
     assert router.take() is None
 
 
@@ -265,7 +274,64 @@ def test_aim_movement_keeps_held_button_without_new_cursor_events():
     inputs = relay_mouse.StreamInput(1)
     inputs.sample(0, 0, 3)
     router = relay_mouse.MotionRouter(inputs, Aim())
-    assert router.take() == (3, 4, 3)
-    assert router.take() == (3, 4, 3)
+    assert router.take() == (3, 4, 3, 0)
+    assert router.take() == (3, 4, 3, 0)
     inputs.sample(0, 0, 0)
-    assert router.take() == (3, 4, 0)
+    assert router.take() == (3, 4, 0, 0)
+
+
+def test_scroll_survives_aim_override_and_keeps_reversals_in_order():
+    class Aim:
+        def tick(self): return (0, 0)
+
+    inputs = relay_mouse.StreamInput(3)
+    router = relay_mouse.MotionRouter(inputs, Aim())
+    inputs.sample(999, 999, 1, 3)
+    inputs.sample(999, 999, 1, -2)
+    inputs.sample(0, 0, 0, 1)
+    assert router.take() == (0, 0, 1, 3)
+    assert router.take() == (0, 0, 1, -2)
+    assert router.take() == (0, 0, 0, 1)
+    assert router.take() is None
+
+
+def test_large_scroll_is_split_without_repeating_displacement():
+    inputs = relay_mouse.StreamInput(1)
+    inputs.sample(10, -4, 0, -300)
+    assert inputs.take() == (10, -4, 0, -127)
+    assert inputs.take() == (0, 0, 0, -127)
+    assert inputs.take() == (0, 0, 0, -46)
+    assert inputs.take() is None
+
+
+def test_wheel_only_stream_packet_uses_signed_wheel_field_once():
+    protocol = load_protocol()
+    port = Port([b'OK M 0\n', b'ERR HID_SEND\n'])
+    relay = protocol.Relay(port)
+    relay.sequence = 0
+    relay_mouse.send_stream(relay, 0, 0, 0, -1)
+    with pytest.raises(RuntimeError):
+        relay_mouse.send_stream(relay, 0, 0, 0, 1)
+    assert relay.sequence == 1
+    assert port.writes == [protocol.frame('M 0 0 0 0 -1'), protocol.frame('M 1 0 0 0 1')]
+
+
+def test_capture_cleans_up_wheel_hook_when_cursor_capture_fails(monkeypatch):
+    events = []
+
+    class Wheel:
+        def start(self): events.append('hook')
+        def close(self): events.append('unhook')
+
+    class Cursor:
+        center = (100, 100)
+        def position(self): return (20, 30)
+        def move(self, point):
+            if point == self.center: raise RuntimeError('capture failed')
+            events.append('restore')
+
+    monkeypatch.setattr(relay_mouse, 'WindowsWheel', Wheel)
+    monkeypatch.setattr(relay_mouse, 'WindowsCursor', Cursor)
+    with pytest.raises(RuntimeError, match='capture failed'):
+        relay_mouse.capture(None, scale=1, hz=250, dry_run=True)
+    assert events == ['hook', 'restore', 'unhook']

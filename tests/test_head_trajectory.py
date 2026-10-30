@@ -238,8 +238,8 @@ def test_manual_movement_and_clicks_forward_during_feedback_wait():
     router = MotionRouter(inputs, WaitingAim())
     inputs.sample(7, -3, 1)
     inputs.sample(2, 1, 0)
-    assert router.take() == (7, -3, 1)
-    assert router.take() == (2, 1, 0)
+    assert router.take() == (7, -3, 1, 0)
+    assert router.take() == (2, 1, 0, 0)
     assert not session.replacing
 
 

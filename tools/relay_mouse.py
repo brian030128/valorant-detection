@@ -1,4 +1,4 @@
-"""Windows cursor-to-UART movement/click relay. Q, Escape or Ctrl+C stops capture."""
+"""Windows cursor/buttons/vertical-wheel relay. Q, Escape or Ctrl+C stops capture."""
 
 import argparse
 import ctypes
@@ -12,6 +12,11 @@ from pathlib import Path
 import sys
 import threading
 import time
+
+if __package__:
+    from .mouse_wheel import WindowsWheel
+else:
+    from mouse_wheel import WindowsWheel
 
 
 def load_protocol():
@@ -157,7 +162,7 @@ class ClickQueue:
 
 
 class StreamInput:
-    """Coalesce movement within each button state without losing drag edges."""
+    """Coalesce displacement without losing button edges or scroll reversals."""
 
     def __init__(self, scale):
         self.scale = scale
@@ -166,7 +171,7 @@ class StreamInput:
         self.pending = deque()
         self.lock = threading.Lock()
 
-    def sample(self, dx, dy, buttons):
+    def sample(self, dx, dy, buttons, wheel=0):
         with self.lock:
             x = dx * self.scale + self.remainder_x
             y = dy * self.scale + self.remainder_y
@@ -174,37 +179,42 @@ class StreamInput:
             self.remainder_x, self.remainder_y = x - ix, y - iy
             changed = buttons != self.previous
             self.previous = buttons
-            if not (ix or iy or changed):
+            if not (ix or iy or changed or wheel):
                 return
-            if self.pending and self.pending[-1][2] == buttons:
+            if (self.pending and self.pending[-1][2] == buttons
+                    and self.pending[-1][3] * wheel >= 0):
                 self.pending[-1][0] += ix
                 self.pending[-1][1] += iy
+                self.pending[-1][3] += wheel
             else:
-                self.pending.append([ix, iy, buttons])
-            if len(self.pending) > 64 or max(abs(self.pending[-1][0]), abs(self.pending[-1][1])) > 32767:
+                self.pending.append([ix, iy, buttons, wheel])
+            if (len(self.pending) > 64 or
+                    max(abs(self.pending[-1][i]) for i in (0, 1, 3)) > 32767):
                 raise RuntimeError("Streaming input backlog exceeded; stopping")
 
     def discard_motion(self):
-        """Drop overridden movement, retaining every queued button transition."""
+        """Drop overridden movement, retaining button transitions and scrolling."""
         with self.lock:
             for event in self.pending:
                 event[0] = event[1] = 0
             self.remainder_x = self.remainder_y = 0.
 
-    def take(self, max_axis=32767):
+    def take(self, max_axis=32767, max_wheel=127):
         with self.lock:
             if not self.pending:
                 return None
-            dx, dy, buttons = self.pending[0]
+            dx, dy, buttons, wheel = self.pending[0]
             largest = max(abs(dx), abs(dy))
             if largest > max_axis:
                 factor = max_axis / largest
                 dx, dy = round(dx * factor), round(dy * factor)
-                self.pending[0][0] -= dx
-                self.pending[0][1] -= dy
-            else:
+            wheel = max(-max_wheel, min(max_wheel, wheel))
+            self.pending[0][0] -= dx
+            self.pending[0][1] -= dy
+            self.pending[0][3] -= wheel
+            if not any(self.pending[0][i] for i in (0, 1, 3)):
                 self.pending.popleft()
-            return dx, dy, buttons
+            return dx, dy, buttons, wheel
 
 
 class MotionRouter:
@@ -224,14 +234,16 @@ class MotionRouter:
         if event is not None:
             self.held_buttons = event[2]
         if override is not None:
-            # A queued release must be sent even if the AI is stationary.
-            event = (*override, self.held_buttons) if event is not None or any(override) else None
+            # Forward button edges and scrolling even when aim is stationary.
+            if event is None and not any(override):
+                return None
+            event = (*override, self.held_buttons, event[3] if event else 0)
         return event
 
 
-def send_stream(relay, dx, dy, buttons):
+def send_stream(relay, dx, dy, buttons, wheel=0):
     sequence = relay.sequence
-    relay.request(f"M {sequence} {dx} {dy} {buttons} 0", f"OK M {sequence}", timeout=0.2)
+    relay.request(f"M {sequence} {dx} {dy} {buttons} {wheel}", f"OK M {sequence}", timeout=0.2)
     relay.sequence = (sequence + 1) & 0xffffffff
 
 
@@ -256,6 +268,7 @@ def capture(relay, *, scale, hz, dry_run, stop=None, aim=None):
     pending = PendingMotion(scale)
     clicks = ClickQueue()
     streaming = dry_run or getattr(relay, "streaming", False)
+    wheel_capture = WindowsWheel() if streaming else None
     stream_input = StreamInput(scale)
     router = MotionRouter(stream_input, aim)
     stop = stop if stop is not None else threading.Event()
@@ -269,7 +282,7 @@ def capture(relay, *, scale, hz, dry_run, stop=None, aim=None):
                     event = router.take()
                     if event is not None:
                         if dry_run:
-                            print(f"dx={event[0]} dy={event[1]} buttons={event[2]}", flush=True)
+                            print(f"dx={event[0]} dy={event[1]} buttons={event[2]} wheel={event[3]}", flush=True)
                         else:
                             send_stream(relay, *event)
                         last_contact = time.monotonic()
@@ -295,10 +308,14 @@ def capture(relay, *, scale, hz, dry_run, stop=None, aim=None):
             stop.set()
 
     worker = threading.Thread(target=transmit, name="mouse-uart")
-    worker.start()
+    worker_started = False
     try:
+        if wheel_capture is not None:
+            wheel_capture.start()
+        worker.start()
+        worker_started = True
         cursor.move(cursor.center)
-        mode = "Live left/right button states: holding and dragging enabled." if streaming else (
+        mode = "Live left/right buttons and vertical scrolling: holding and dragging enabled." if streaming else (
             "Legacy firmware: 30 ms clicks only; holding/dragging unavailable.")
         print(f"Relaying movement; Q, Escape or Ctrl+C exits. {mode}")
         while not stop.is_set() and not cursor.quit_pressed():
@@ -310,7 +327,7 @@ def capture(relay, *, scale, hz, dry_run, stop=None, aim=None):
             if streaming:
                 if aim is not None and aim.replacing:
                     dx = dy = 0
-                stream_input.sample(dx, dy, buttons)
+                stream_input.sample(dx, dy, buttons, wheel_capture.take())
             else:
                 clicks.sample(buttons)
                 if dx or dy:
@@ -322,7 +339,12 @@ def capture(relay, *, scale, hz, dry_run, stop=None, aim=None):
         try:
             cursor.move(original)
         finally:
-            worker.join()
+            try:
+                if worker_started:
+                    worker.join()
+            finally:
+                if wheel_capture is not None:
+                    wheel_capture.close()
     if errors:
         raise errors[0]
 
@@ -338,6 +360,7 @@ def open_relay(port_name, *, probe_only=False, wait_for_usb=False, stop=None):
     with port:
         try:
             relay = protocol.Relay(port)
+            relay.frame = protocol.frame
             reply = relay.probe()
             print(reply, flush=True)
             check_firmware(reply, require_usb=False)
@@ -357,6 +380,12 @@ def open_relay(port_name, *, probe_only=False, wait_for_usb=False, stop=None):
             if relay.streaming:
                 relay.request("CAPS", "OK CAPS STREAM=1 MAX_AXIS=32767 WATCHDOG_MS=250")
                 if not probe_only:
+                    try:
+                        relay.request("PACE", "OK PACE HZ=1000 SOURCE=USB")
+                    except RuntimeError as exc:
+                        raise RuntimeError("Cannot verify 1000 Hz USB pacing; flash the updated "
+                                           "firmware/m2k_stream build before live streaming") from exc
+                    relay.usb_hz = 1000
                     relay.request("STREAM", "OK STREAM")
                     relay.sequence = 0
             yield relay
